@@ -1,0 +1,29 @@
+[project]
+name = "rp-sync"
+version = "0.1.0"
+description = "Sync Synology reverse proxy, DNS (RFC2136) and step-ca certs from a single config."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pyyaml>=6.0",
+  "requests>=2.32",
+  "dnspython>=2.6",
+]
+
+[project.scripts]
+rp-sync = "rp_sync.cli:main"
+
+[tool.black]
+line-length = 107
+target-version = ['py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+  | secrets
+)/
+'''

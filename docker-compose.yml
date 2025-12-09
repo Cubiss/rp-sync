@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  rp-sync:
+    build: .
+    container_name: rp-sync
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+
+      # secrets (NOT in git)
+      - ./secrets/dsm_username:/secrets/dsm_username:ro
+      - ./secrets/dsm_password:/secrets/dsm_password:ro
+      - ./secrets/step_provisioner_password:/secrets/step_provisioner_password:ro
+      - ./secrets/dns_tsig_key:/secrets/dns_tsig_key:ro
+
+    environment:
+      - RP_SYNC_CONFIG_PATH=/config/config.yaml
+    network_mode: "host"
