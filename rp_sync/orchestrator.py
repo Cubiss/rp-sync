@@ -82,6 +82,7 @@ class SyncOrchestrator:
                 hostnames=all_hosts,
             )
 
+
 def parse_dest_url(url: str) -> Tuple[Protocol, str, int]:
     p = urlparse(url)
     protocol: Protocol = p.scheme or "http"

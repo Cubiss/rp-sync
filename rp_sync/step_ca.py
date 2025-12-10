@@ -42,7 +42,7 @@ class StepCAClient:
             self.cfg.ca_url,
             "--provisioner",
             self.cfg.provisioner,
-            f"--not-after={self.cfg.default_ltl_hours}h"
+            f"--not-after={self.cfg.default_ltl_hours}h",
         ]
 
         # add --root if configured

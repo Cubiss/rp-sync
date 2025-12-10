@@ -9,7 +9,8 @@ from typing import Optional, Dict
 
 from .models import LoggingConfig
 
-APP_NAME = 'rp-sync'
+APP_NAME = "rp-sync"
+
 
 class Logger:
     _instances: Dict[str, Logger] = {}
@@ -19,7 +20,7 @@ class Logger:
         app_name: str = APP_NAME,
         log_level: str = "INFO",
         keep: int = 10,
-        log_dir: Optional[Path] = './logs',
+        log_dir: Optional[Path] = "./logs",
     ):
         self.app_name = app_name
         self.keep = keep
@@ -64,10 +65,10 @@ class Logger:
             app_name=app_name,
             log_level=getattr(config, "log_level", "INFO"),
             keep=getattr(config, "log_keep", 10),
-            log_dir=getattr(config, "log_dir", None)
+            log_dir=getattr(config, "log_dir", None),
         )
         cls._instances[key] = inst
-        inst.add_console('INFO')
+        inst.add_console("INFO")
         return inst
 
     def set_level(self, level: str | int) -> None:

@@ -24,9 +24,10 @@ class DnsConfig:
 
     tsig_key_file: str | None = None
 
+
 @dataclass
 class LoggingConfig:
-    log_dir: str = './logs/'
+    log_dir: str = "./logs/"
     log_keep: int = 10
 
 

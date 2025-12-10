@@ -5,13 +5,7 @@ from typing import Any, Dict, List
 
 import yaml
 
-from .models import (
-    RootConfig,
-    DsmConfig,
-    DnsConfig,
-    CertsConfig,
-    ServiceConfig, LoggingConfig
-)
+from .models import RootConfig, DsmConfig, DnsConfig, CertsConfig, ServiceConfig, LoggingConfig
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:
@@ -56,14 +50,11 @@ def load_config(path: str | None = None) -> RootConfig:
     )
 
     logging = LoggingConfig(
-        log_dir=logging_raw.get("log_dir", "./logs/"),
-        log_keep=int(logging_raw.get("log_keep", 10))
+        log_dir=logging_raw.get("log_dir", "./logs/"), log_keep=int(logging_raw.get("log_keep", 10))
     )
 
     services: List[ServiceConfig] = []
     for s in services_raw:
-        tls = None
-
         svc = ServiceConfig(
             name=s["name"],
             host=s["host"],
@@ -71,7 +62,7 @@ def load_config(path: str | None = None) -> RootConfig:
             source_port=int(s["source_port"]),
             source_protocol=s["source_protocol"],
             dns_a=s.get("dns_a"),
-            aliases=s.get("aliases", [])
+            aliases=s.get("aliases", []),
         )
         services.append(svc)
 
