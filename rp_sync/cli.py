@@ -15,6 +15,8 @@ def main() -> None:
     watcher = Watcher(logger)
 
     if "--watch" in sys.argv:
+        logger.info("Starting in watcher mode.")
         watcher.watch()
     else:
+        logger.info("Starting single run.")
         watcher.run_sync()
