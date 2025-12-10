@@ -141,3 +141,24 @@ services:
     # Example: Jellyfin running on the same NAS
     dest_url: http://localhost:8096
     dns_a: 10.0.0.5
+
+```
+
+## Running
+
+### One-shot mode
+
+Runs a single sync and exits with non-zero status on error:
+
+```bash
+rp-sync
+```
+
+### Watcher mode
+
+Looks for updates of `RP_SYNC_CONFIG_PATH` every `RP_SYNC_WATCH_INTERVAL_SEC`, runs the synchronization 
+process and updates `RP_SYNC_HEALTH_FILE`.
+
+```bash
+rp-sync --watch
+```
