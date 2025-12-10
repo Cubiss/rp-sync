@@ -10,8 +10,7 @@ from .models import (
     DsmConfig,
     DnsConfig,
     CertsConfig,
-    ServiceConfig,
-    TLSServiceConfig,
+    ServiceConfig, LoggingConfig
 )
 
 
@@ -28,6 +27,7 @@ def load_config(path: str | None = None) -> RootConfig:
     dns_raw = raw["dns"]
     certs_raw = raw.get("certs", {})
     services_raw: List[Dict[str, Any]] = raw.get("services", [])
+    logging_raw = raw["logging"]
 
     dsm = DsmConfig(
         host=dsm_raw["host"],
@@ -46,26 +46,23 @@ def load_config(path: str | None = None) -> RootConfig:
     )
 
     certs = CertsConfig(
-        enabled=certs_raw.get("enabled", False),
+        disabled=certs_raw.get("disabled", False),
         ca_url=certs_raw.get("ca_url", ""),
         ca_fingerprint=certs_raw.get("ca_fingerprint", ""),
         provisioner=certs_raw.get("provisioner", ""),
         provisioner_password_file=certs_raw.get("provisioner_password_file"),
         default_ltl_hours=int(certs_raw.get("default_ltl_hours", 2160)),
-        ca_root_file=certs_raw.get("ca_root_file"),
+        root_ca=certs_raw.get("root_ca"),
+    )
+
+    logging = LoggingConfig(
+        log_dir=logging_raw.get("log_dir", "./logs/"),
+        log_keep=int(logging_raw.get("log_keep", 10))
     )
 
     services: List[ServiceConfig] = []
     for s in services_raw:
-        tls_raw = s.get("tls")
         tls = None
-        if tls_raw:
-            tls = TLSServiceConfig(
-                use_step_ca=tls_raw.get("use_step_ca", False),
-                common_name=tls_raw.get("common_name"),
-                sans=tls_raw.get("sans", []),
-                dsm_cert_name=tls_raw.get("dsm_cert_name"),
-            )
 
         svc = ServiceConfig(
             name=s["name"],
@@ -74,9 +71,8 @@ def load_config(path: str | None = None) -> RootConfig:
             source_port=int(s["source_port"]),
             source_protocol=s["source_protocol"],
             dns_a=s.get("dns_a"),
-            aliases=s.get("aliases", []),
-            tls=tls,
+            aliases=s.get("aliases", [])
         )
         services.append(svc)
 
-    return RootConfig(dsm=dsm, dns=dns, certs=certs, services=services)
+    return RootConfig(dsm=dsm, dns=dns, certs=certs, services=services, logging=logging)

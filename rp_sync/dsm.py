@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .logging_utils import Logger
 from .models import DsmConfig, ReverseProxyRule
 from typing import List, Optional, Dict, Any
 
@@ -13,14 +14,15 @@ def _read_secret(path: str) -> str:
 
 
 class DsmSession:
-    def __init__(self, cfg: DsmConfig):
+    def __init__(self, cfg: DsmConfig, logger: Logger):
         self.cfg = cfg
+        self.logger = logger
         scheme = "https" if cfg.https else "http"
         self.base = f"{scheme}://{cfg.host}:{cfg.port}"
         self.session = requests.Session()
         self.verify_ssl = cfg.verify_ssl
         self.sid: Optional[str] = None
-        self.synotoken: str | None = None  # token for core APIs
+        self.synotoken: str | None = None
 
     def url(self, path: str) -> str:
         return f"{self.base}{path}"
@@ -28,7 +30,7 @@ class DsmSession:
     def login(self, username: str, password: str) -> None:
         # Discover auth path
         info_resp = self.session.get(
-            self.url("/webapi/query.cgi"),  # query.cgi is the canonical API info endpoint
+            self.url("/webapi/query.cgi"),
             params={
                 "api": "SYNO.API.Info",
                 "version": "1",
@@ -102,8 +104,9 @@ class DsmSession:
 
 
 class DsmCertificateClient:
-    def __init__(self, dsm: DsmSession):
+    def __init__(self, dsm: DsmSession, logger: Logger):
         self.dsm = dsm
+        self.logger = logger
 
     def list_certificates(self) -> List[Dict[str, Any]]:
         # Use POST, DSM behaves like the UI: /webapi/entry.cgi with form data
@@ -184,7 +187,7 @@ class DsmCertificateClient:
             raise RuntimeError(f"DSM cert import failed: {body}")
 
         action = "Updated" if existing_id else "Created"
-        print(f"[DSM] {action} certificate '{name}'")
+        self.logger.info(f"[DSM] {action} certificate '{name}'")
 
     def assign_to_reverse_proxy_hosts(self, cert_name: str, hostnames: list[str]) -> None:
         """
@@ -229,7 +232,7 @@ class DsmCertificateClient:
                 )
 
         if not settings:
-            print(f"[DSM] No ReverseProxy service mappings changed for cert '{cert_name}'")
+            self.logger.info(f"[DSM] No ReverseProxy service mappings changed for cert '{cert_name}'")
             return
 
         # 3) Call SYNO.Core.Certificate.Service/set with JSON-encoded settings
@@ -245,12 +248,12 @@ class DsmCertificateClient:
 
         data = resp.get("data", {})
         if data.get("restart_httpd"):
-            print(
+            self.logger.info(
                 f"[DSM] Certificate '{cert_name}' assigned to ReverseProxy hosts "
                 f"{', '.join(hostnames)} (HTTPD restart requested)"
             )
         else:
-            print(
+            self.logger.info(
                 f"[DSM] Certificate '{cert_name}' assigned to ReverseProxy hosts "
                 f"{', '.join(hostnames)}"
             )
@@ -308,8 +311,9 @@ class DsmReverseProxyClient:
     VERSION = 1
     PATH = "/webapi/entry.cgi/SYNO.Core.AppPortal.ReverseProxy"
 
-    def __init__(self, session: "DsmSession") -> None:
+    def __init__(self, session: "DsmSession", logger: Logger) -> None:
         self.session = session
+        self.logger = logger
 
     # ---------- helpers ----------
 
@@ -415,10 +419,10 @@ class DsmReverseProxyClient:
             # Create new
             payload = {"entry": json.dumps(entry)}
             self._call("create", **payload)
-            print(f"[DSM] Created reverse-proxy rule for {rule.src_host}:{rule.src_port}")
+            self.logger.info(f"[DSM] Created reverse-proxy rule for {rule.src_host}:{rule.src_port}")
         else:
             # Update existing – DSM expects UUID to identify the rule
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
             self._call("set", **payload)
-            print(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")
+            self.logger.info(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")

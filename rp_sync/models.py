@@ -24,24 +24,25 @@ class DnsConfig:
 
     tsig_key_file: str | None = None
 
+@dataclass
+class LoggingConfig:
+    log_dir: str = './logs/'
+    log_keep: int = 10
+
 
 @dataclass
 class CertsConfig:
-    enabled: bool = False
+    disabled: bool = False
     ca_url: str = ""
     ca_fingerprint: str = ""
     provisioner: str = ""
     provisioner_password_file: Optional[str] = None
-    default_ltl_hours: int = 2160  # 90 days
-    ca_root_file: Optional[str] = None
+    default_ltl_hours: int = 2160
+    root_ca: Optional[str] = None
 
-
-@dataclass
-class TLSServiceConfig:
-    use_step_ca: bool = False
-    common_name: Optional[str] = None
-    sans: List[str] = field(default_factory=list)
-    dsm_cert_name: Optional[str] = None
+    @property
+    def enabled(self) -> bool:
+        return not self.disabled
 
 
 @dataclass
@@ -53,7 +54,6 @@ class ServiceConfig:
     source_protocol: Protocol
     dns_a: Optional[str] = None
     aliases: List[str] = field(default_factory=list)
-    tls: Optional[TLSServiceConfig] = None
 
 
 @dataclass
@@ -62,6 +62,7 @@ class RootConfig:
     dns: DnsConfig
     certs: CertsConfig
     services: List[ServiceConfig]
+    logging: LoggingConfig
 
 
 @dataclass

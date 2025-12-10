@@ -6,8 +6,8 @@ Config-driven sync tool for a home lab with a Synology NAS.
 
 - **Synology DSM reverse proxy rules** (DSM Control Panel → Login Portal → Reverse Proxy)
 - **Internal DNS A records** (via RFC2136 / TSIG updates)
-- **TLS certificates from step-ca**
-- **Certificate bindings for reverse proxies** (DSM Control Panel → Security → Certificates)
+- **TLS certificates from step-ca** (optional)
+- **Certificate bindings for those step-issued certs** (optional)
 
 ---
 
@@ -27,10 +27,11 @@ For every service in `config.yaml`:
    - Uses `step ca certificate` to issue a cert for the service
      (with SANs from your config).
    - Imports or updates that cert in DSM (without changing the global default).
-
-4. **Bind cert to reverse proxies**
-   - Rebinds the corresponding `ReverseProxy` services in DSM so that
-     your `host`/`aliases` use the service’s own certificate.
+   - https://hub.docker.com/r/smallstep/step-ca
+    
+4. **Bind cert to reverse proxies (when step-ca is enabled)**
+   - After importing the cert into DSM, rp-sync rebinds the corresponding
+     `ReverseProxy` services so that your `host`/`aliases` use that certificate.
 
 ---
 
@@ -45,7 +46,7 @@ Example:
 
 dsm:
   # Hostname (or IP) of your Synology NAS
-  host: nas.internal.example.com
+  host: nas.internal.example.net
   port: 5001
   https: true
   # Can be true/false or a path to a CA bundle.
@@ -58,25 +59,27 @@ dns:
   # Authoritative DNS server for your internal zone
   server: 10.0.0.10
   port: 53
-  zone: home.example.com.
-  tsig_key_name: rp-sync.
-  tsig_key_secret_file: /secrets/dns_tsig_secret
-  tsig_key_algorithm: hmac-sha256
+  zone: home.example.net.          # note the trailing dot
+  tsig_key_file: /secrets/rp-sync.key
 
-step_ca:
+certs:
   enabled: true
-  ca_url: https://ca.internal.example.com:8443
+  ca_url: https://ca.internal.example.net:8443
   root_ca: /certs/ca-root.crt
-  provisioner: admin@example.com
+  provisioner: admin@example.net
   provisioner_password_file: /secrets/step_provisioner_password
   # Lifetime of issued certs in hours (90 days here)
   default_ltl_hours: 2160
 
+logging:
+  log_dir: /logs/
+
 services:
   - name: vpn-ui
-    host: vpn.home.example.com
+    host: vpn.home.example.net
     aliases:
-      - wg.home.example.com
+      - wg.home.example.net
+      - wireguard.home.example.net
 
     # Reverse proxy frontend (what DSM listens on)
     source_port: 443
@@ -88,17 +91,8 @@ services:
     # DNS A record to create/update
     dns_a: 10.0.0.5   # IP of your NAS or reverse-proxy host
 
-    # Optional TLS / step-ca integration
-    tls:
-      use_step_ca: true
-      common_name: vpn.home.example.com
-      sans:
-        - vpn.home.example.com
-        - wg.home.example.com
-      dsm_cert_name: rp-sync-vpn
-
   - name: media
-    host: media.home.example.com
+    host: media.home.example.net
     aliases: []
 
     source_port: 443
@@ -108,11 +102,4 @@ services:
     dest_url: http://localhost:8096
 
     dns_a: 10.0.0.5
-
-    tls:
-      use_step_ca: true
-      common_name: media.home.example.com
-      sans:
-        - media.home.example.com
-      dsm_cert_name: rp-sync-media
 ```

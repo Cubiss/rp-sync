@@ -29,7 +29,7 @@ COPY rp_sync ./rp_sync
 RUN pip install --no-cache-dir .
 
 
-VOLUME ["/config", "/secrets", "/certs"]
+VOLUME ["/config", "/secrets", "/certs", "/logs"]
 
 # Run the installed module's CLI
 CMD ["rp-sync"]

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Tuple
 from urllib.parse import urlparse
 
+from .logging_utils import Logger
 from .models import RootConfig, ServiceConfig, ReverseProxyRule, Protocol
 from .dns_updater import DnsUpdater
 from .step_ca import StepCAClient
@@ -22,20 +23,21 @@ class SyncContext:
 
 
 class SyncOrchestrator:
-    def __init__(self, ctx: SyncContext):
+    def __init__(self, ctx: SyncContext, logger: Logger):
         self.ctx = ctx
+        self.logger = logger
 
     def sync(self) -> None:
         for svc in self.ctx.cfg.services:
             self._sync_service(svc)
-        print("\nAll services processed.")
+        self.logger.info("\nAll services processed.")
 
     def _sync_service(self, svc: ServiceConfig) -> None:
         all_hosts: List[str] = [svc.host] + svc.aliases
 
-        print(f"\n=== Service: {svc.name} ===")
-        print(f"Hosts: {', '.join(all_hosts)}")
-        print(f"Backend: {svc.dest_url}")
+        self.logger.info(f"\n=== Service: {svc.name} ===")
+        self.logger.info(f"Hosts: {', '.join(all_hosts)}")
+        self.logger.info(f"Backend: {svc.dest_url}")
 
         # 1) DNS
         if svc.dns_a:
@@ -58,10 +60,11 @@ class SyncOrchestrator:
             self.ctx.dsm_rp.upsert_rule(rp_rule)
 
         # 3) TLS via step-ca + DSM certs
-        if svc.tls and svc.tls.use_step_ca and self.ctx.step_ca.enabled:
-            cn = svc.tls.common_name or svc.host
-            sans = svc.tls.sans or all_hosts
-            dsm_cert_name = svc.tls.dsm_cert_name or f"rp-sync-{svc.name}"
+        if self.ctx.step_ca.enabled and svc.source_protocol == "https":
+            all_hosts = [svc.host] + svc.aliases
+            cn = svc.host
+            sans = all_hosts
+            dsm_cert_name = f"rp-sync-{svc.name}"
 
             tmp_dir = Path("/tmp")
             cert_path = tmp_dir / f"{svc.name}.crt"
@@ -75,9 +78,9 @@ class SyncOrchestrator:
             self.ctx.dsm_certs.import_or_replace_certificate(dsm_cert_name, cert_pem, key_pem)
 
             self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(
-                dsm_cert_name, hostnames=[svc.host] + svc.aliases
+                dsm_cert_name,
+                hostnames=all_hosts,
             )
-
 
 def parse_dest_url(url: str) -> Tuple[Protocol, str, int]:
     p = urlparse(url)

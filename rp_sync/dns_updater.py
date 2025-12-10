@@ -11,6 +11,7 @@ from dns import tsigkeyring
 from dns import rdatatype
 from dns import name as dnsname
 
+from .logging_utils import Logger
 from .models import DnsConfig
 
 
@@ -57,8 +58,9 @@ def _parse_bind_tsig_file(path: str) -> tuple[str, str, str]:
 
 
 class DnsUpdater:
-    def __init__(self, cfg: DnsConfig):
+    def __init__(self, cfg: DnsConfig, logger: Logger):
         self.cfg = cfg
+        self.logger = logger
 
         name, alg, secret = _parse_bind_tsig_file(cfg.tsig_key_file)
         # normalize into what dnspython expects
@@ -84,7 +86,7 @@ class DnsUpdater:
         upd.replace(fqdn, ttl, rdatatype.A, ip)
 
         server_ip = self._resolve_server_ip()
-        print(f"[DNS] Updating A {hostname} -> {ip} via {server_ip}:{self.cfg.port}")
+        self.logger.info(f"[DNS] Updating A {hostname} -> {ip} via {server_ip}:{self.cfg.port}")
         resp = dns_query.tcp(upd, server_ip, port=self.cfg.port)
         rcode = resp.rcode()
         if rcode != 0:
