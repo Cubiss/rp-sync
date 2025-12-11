@@ -90,4 +90,6 @@ class DnsUpdater:
         resp = dns_query.tcp(upd, server_ip, port=self.cfg.port)
         rcode = resp.rcode()
         if rcode != 0:
+            self.logger.debug(f"[DNS] Failed request: {upd}")
+            self.logger.debug(f"[DNS] Failed response: {resp}")
             raise RuntimeError(f"DNS update failed for {hostname}: rcode={rcode}")

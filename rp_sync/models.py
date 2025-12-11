@@ -26,12 +26,6 @@ class DnsConfig:
 
 
 @dataclass
-class LoggingConfig:
-    log_dir: str = "./logs/"
-    log_keep: int = 10
-
-
-@dataclass
 class CertsConfig:
     disabled: bool = False
     ca_url: str = ""
@@ -62,8 +56,6 @@ class RootConfig:
     dsm: DsmConfig
     dns: DnsConfig
     certs: CertsConfig
-    services: List[ServiceConfig]
-    logging: LoggingConfig
 
 
 @dataclass

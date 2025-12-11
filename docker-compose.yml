@@ -1,19 +1,25 @@
-version: "3.8"
-
 services:
   rp-sync:
-    build: .
+    image: ghcr.io/cubiss/rp-sync:latest
     container_name: rp-sync
-    restart: unless-stopped
-    volumes:
-      - ./config.yaml:/config/config.yaml:ro
+    restart: "no"
 
-      # secrets (NOT in git)
-      - ./secrets/dsm_username:/secrets/dsm_username:ro
-      - ./secrets/dsm_password:/secrets/dsm_password:ro
-      - ./secrets/step_provisioner_password:/secrets/step_provisioner_password:ro
-      - ./secrets/dns_tsig_key:/secrets/dns_tsig_key:ro
+    network_mode: host
+    dns:
+      - 10.23.0.1
 
     environment:
       - RP_SYNC_CONFIG_PATH=/config/config.yaml
-    network_mode: "host"
+      - RP_SYNC_SERVICES_PATH=/config/services        # NEW
+      - RP_SYNC_HEALTH_FILE=/health/rp-sync-health    # CHANGED
+      - RP_SYNC_WATCH_INTERVAL_SEC=5
+
+    volumes:
+      - /volume1/docker/rp-sync/config/config.yaml:/config/config.yaml:ro
+      - /volume1/docker/rp-sync/config/services:/config/services:ro   # NEW
+      - /volume1/docker/rp-sync/secrets:/secrets:ro
+      - /volume1/docker/rp-sync/certs:/certs:ro
+      - /volume1/docker/rp-sync/logs:/logs:rw
+      - /volume1/docker/rp-sync/health:/health:rw
+
+    command: ["rp-sync", "--watch"]

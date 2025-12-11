@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 from urllib.parse import urlparse
+import traceback
 
 from .logging_utils import Logger
 from .models import RootConfig, ServiceConfig, ReverseProxyRule, Protocol
@@ -20,6 +21,7 @@ class SyncContext:
     step_ca: StepCAClient
     dsm_certs: DsmCertificateClient
     dsm_rp: DsmReverseProxyClient
+    services: List[ServiceConfig]
 
 
 class SyncOrchestrator:
@@ -27,10 +29,34 @@ class SyncOrchestrator:
         self.ctx = ctx
         self.logger = logger
 
-    def sync(self) -> None:
-        for svc in self.ctx.cfg.services:
-            self._sync_service(svc)
-        self.logger.info("\nAll services processed.")
+    def sync(self) -> Tuple[bool, List[str]]:
+        """Run sync for all services.
+
+        Returns:
+            (ok, failed_services)
+            ok == True  -> all services synced
+            ok == False -> some services failed; their names are in failed_services
+        """
+        failed: List[str] = []
+
+        for svc in self.ctx.services:
+            try:
+                self._sync_service(svc)
+            except Exception:
+                failed.append(svc.name)
+                tb = traceback.format_exc()
+                self.logger.error(
+                    f"\n[orchestrator] Failed to sync service '{svc.name}':\n{tb}"
+                )
+
+        if failed:
+            self.logger.error(
+                "\nSome services failed to sync: " + ", ".join(sorted(failed))
+            )
+            return False, failed
+
+        self.logger.info("\nAll services processed successfully.")
+        return True, failed
 
     def _sync_service(self, svc: ServiceConfig) -> None:
         all_hosts: List[str] = [svc.host] + svc.aliases

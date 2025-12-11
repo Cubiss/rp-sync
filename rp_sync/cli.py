@@ -3,16 +3,16 @@ from __future__ import annotations
 from .config import load_config
 from .logging_utils import Logger
 
-
 import sys
 
 from .watcher import Watcher
 
 
 def main() -> None:
-    cfg = load_config()
-    logger = Logger.from_config(cfg.logging)
-    watcher = Watcher(logger)
+    logger = Logger.from_env()
+    config = load_config()
+    watcher = Watcher.from_core_config(logger, config)
+
 
     if "--watch" in sys.argv:
         logger.info("Starting in watcher mode.")

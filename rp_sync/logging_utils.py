@@ -7,9 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
 
-from .models import LoggingConfig
-
-APP_NAME = "rp-sync"
+from rp_sync.config import LOG_LEVEL, APP_NAME, LOG_KEEP, LOG_DIR, DEFAULT_LOG_LEVEL, DEFAULT_LOG_DIR, DEFAULT_LOG_KEEP
 
 
 class Logger:
@@ -22,6 +20,7 @@ class Logger:
         keep: int = 10,
         log_dir: Optional[Path] = "./logs",
     ):
+        print(log_level)
         self.app_name = app_name
         self.keep = keep
         self.log_dir = Path(log_dir)
@@ -43,7 +42,7 @@ class Logger:
 
         # Idempotent: only add our file handlers once per process
         if not any(
-            isinstance(h, logging.FileHandler) and getattr(h, "_w3cwatcher_file", False)
+            isinstance(h, logging.FileHandler) and getattr(h, "_app_file", False)
             for h in self.logger.handlers
         ):
             self._add_file_handlers()
@@ -55,20 +54,20 @@ class Logger:
     # ---------- public helpers ----------
 
     @classmethod
-    def from_config(cls, config: LoggingConfig, app_name: str = APP_NAME) -> Logger:
-        key = f"{app_name}"
+    def from_env(cls) -> Logger:
+        key = f"{APP_NAME}"
         if key in cls._instances:
             inst = cls._instances[key]
-            inst.set_level(getattr(config, "log_level", "INFO"))
+            inst.set_level(os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL))
             return inst
         inst = cls(
-            app_name=app_name,
-            log_level=getattr(config, "log_level", "INFO"),
-            keep=getattr(config, "log_keep", 10),
-            log_dir=getattr(config, "log_dir", None),
+            app_name=APP_NAME,
+            log_level=os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL),
+            keep=os.environ.get(LOG_KEEP, DEFAULT_LOG_KEEP),
+            log_dir=os.environ.get(LOG_DIR, DEFAULT_LOG_DIR),
         )
         cls._instances[key] = inst
-        inst.add_console("INFO")
+        inst.add_console(os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL))
         return inst
 
     def set_level(self, level: str | int) -> None:
@@ -79,13 +78,13 @@ class Logger:
 
     def add_console(self, level: str | int = "INFO") -> None:
         if not any(
-            isinstance(h, logging.StreamHandler) and getattr(h, "_w3cwatcher_console", False)
+            isinstance(h, logging.StreamHandler) and getattr(h, "_app_console", False)
             for h in self.logger.handlers
         ):
             ch = logging.StreamHandler()
             ch.setFormatter(self._base_fmt)
             ch.setLevel(getattr(logging, str(level).upper(), level))
-            ch._w3cwatcher_console = True
+            ch._app_console = True
             self.logger.addHandler(ch)
 
     # ---------- internals ----------
@@ -99,7 +98,7 @@ class Logger:
             fh = logging.FileHandler(path, encoding="utf-8", mode=mode)
             fh.setFormatter(self._base_fmt)
             fh.setLevel(logging.DEBUG)  # capture everything to disk
-            fh._w3cwatcher_file = True  # marker to avoid duplicates
+            fh._app_file = True  # marker to avoid duplicates
             self.logger.addHandler(fh)
 
     def _prune_old_logs(self) -> None:

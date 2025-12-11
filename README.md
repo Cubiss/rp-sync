@@ -45,8 +45,12 @@ For every service in `config.yaml`:
 ## Configuration
 
 Config path is taken from the `RP_SYNC_CONFIG_PATH` environment variable.  
-If not set, the watcher uses `./config.yaml` by default; the Docker image
-is usually run with `/config/config.yaml`.
+If not set, the watcher uses `./config.yaml` by default.
+
+Logging env variables:
+- `RP_SYNC_LOG_DIR` [`./logs/`]:  Where to keep latest.log and logs from previous runs.
+- `RP_SYNC_LOG_KEEP` [`10`] How many historical logs to keep.
+- `RP_SYNC_LOG_LEVEL` [`INFO`] Verbosity
 
 ### Example config
 
@@ -105,12 +109,6 @@ certs:
   # Root or intermediate CA used to verify the CA (and for DSM trust)
   root_ca: /certs/ca-root.crt
 
-logging:
-  # Where rotated logs are stored inside the container
-  log_dir: /logs/
-
-  # How many old log files to keep
-  log_keep: 10
 
 services:
   - name: vpn-ui
