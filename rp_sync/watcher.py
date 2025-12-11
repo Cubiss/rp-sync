@@ -57,7 +57,7 @@ class Watcher:
             step_ca=step_ca,
             dsm_certs=dsm_certs,
             dsm_rp=dsm_rp,
-            services=[]
+            services=[],
         )
 
         self._stop_event = threading.Event()
@@ -110,8 +110,7 @@ class Watcher:
         signal.signal(signal.SIGTERM, self._handle_stop)
         signal.signal(signal.SIGINT, self._handle_stop)
         self.logger.debug(
-            "[watcher] Registered signal handlers for SIGTERM and SIGINT "
-            "(Docker stop and Ctrl+C)"
+            "[watcher] Registered signal handlers for SIGTERM and SIGINT " "(Docker stop and Ctrl+C)"
         )
 
     def _handle_stop(self, signum, frame) -> None:  # type: ignore[override]
@@ -195,9 +194,7 @@ class Watcher:
                 if force_first_run or last_services_mtime is None or mtime != last_services_mtime:
                     force_first_run = False
                     last_services_mtime = mtime
-                    self.logger.info(
-                        "[watcher] Detected services change, running sync..."
-                    )
+                    self.logger.info("[watcher] Detected services change, running sync...")
                     try:
                         ok, failed_services = self.run_sync()
                     except Exception:
@@ -211,14 +208,9 @@ class Watcher:
                         else:
                             if failed_services:
                                 services_str = ", ".join(sorted(failed_services))
-                                msg = (
-                                        "Sync completed with errors for services: "
-                                        + services_str
-                                )
+                                msg = "Sync completed with errors for services: " + services_str
                             else:
-                                msg = (
-                                    "Sync completed with errors (some services failed)"
-                                )
+                                msg = "Sync completed with errors (some services failed)"
 
                             self.logger.warning("[watcher] " + msg)
                             self._write_health(False, msg)
@@ -246,12 +238,8 @@ class Watcher:
         else:
             if failed_services:
                 services_str = ", ".join(sorted(failed_services))
-                self.logger.warning(
-                    "Sync run completed with errors for services: " + services_str
-                )
+                self.logger.warning("Sync run completed with errors for services: " + services_str)
             else:
-                self.logger.warning(
-                    "Sync run completed with errors (some services failed)"
-                )
+                self.logger.warning("Sync run completed with errors (some services failed)")
 
         return ok, failed_services

@@ -3,11 +3,20 @@ from __future__ import annotations
 import logging
 
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
 
-from rp_sync.config import LOG_LEVEL, APP_NAME, LOG_KEEP, LOG_DIR, DEFAULT_LOG_LEVEL, DEFAULT_LOG_DIR, DEFAULT_LOG_KEEP
+from rp_sync.config import (
+    LOG_LEVEL,
+    APP_NAME,
+    LOG_KEEP,
+    LOG_DIR,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_LOG_DIR,
+    DEFAULT_LOG_KEEP,
+)
 
 
 class Logger:
@@ -20,7 +29,6 @@ class Logger:
         keep: int = 10,
         log_dir: Optional[Path] = "./logs",
     ):
-        print(log_level)
         self.app_name = app_name
         self.keep = keep
         self.log_dir = Path(log_dir)
@@ -81,7 +89,7 @@ class Logger:
             isinstance(h, logging.StreamHandler) and getattr(h, "_app_console", False)
             for h in self.logger.handlers
         ):
-            ch = logging.StreamHandler()
+            ch = logging.StreamHandler(stream=sys.stdout)
             ch.setFormatter(self._base_fmt)
             ch.setLevel(getattr(logging, str(level).upper(), level))
             ch._app_console = True

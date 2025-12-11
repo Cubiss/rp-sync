@@ -92,8 +92,4 @@ def load_config(path: str | None = None) -> RootConfig:
     """
     core = load_root_config(path=path)
 
-    return RootConfig(
-        dsm=core.dsm,
-        dns=core.dns,
-        certs=core.certs
-    )
+    return RootConfig(dsm=core.dsm, dns=core.dns, certs=core.certs)

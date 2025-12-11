@@ -13,7 +13,6 @@ def main() -> None:
     config = load_config()
     watcher = Watcher.from_core_config(logger, config)
 
-
     if "--watch" in sys.argv:
         logger.info("Starting in watcher mode.")
         watcher.watch()

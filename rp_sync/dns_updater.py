@@ -167,9 +167,7 @@ class DnsUpdater:
         upd.replace(fqdn, ttl, rdatatype.A, ip)
 
         server_ip = self._resolve_server_ip(zone_ctx.server_host, zone_ctx.server_port)
-        self.logger.info(
-            f"[DNS] Updating A {hostname} -> {ip} via {server_ip}:{zone_ctx.server_port}"
-        )
+        self.logger.info(f"[DNS] Updating A {hostname} -> {ip} via {server_ip}:{zone_ctx.server_port}")
         resp = dns_query.tcp(upd, server_ip, port=zone_ctx.server_port)
         rcode = resp.rcode()
         if rcode != 0:

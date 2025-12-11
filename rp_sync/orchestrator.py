@@ -45,14 +45,10 @@ class SyncOrchestrator:
             except Exception:
                 failed.append(svc.name)
                 tb = traceback.format_exc()
-                self.logger.error(
-                    f"\n[orchestrator] Failed to sync service '{svc.name}':\n{tb}"
-                )
+                self.logger.error(f"\n[orchestrator] Failed to sync service '{svc.name}':\n{tb}")
 
         if failed:
-            self.logger.error(
-                "\nSome services failed to sync: " + ", ".join(sorted(failed))
-            )
+            self.logger.error("\nSome services failed to sync: " + ", ".join(sorted(failed)))
             return False, failed
 
         self.logger.info("\nAll services processed successfully.")
