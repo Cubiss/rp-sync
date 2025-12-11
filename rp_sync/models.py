@@ -17,12 +17,10 @@ class DsmConfig:
 
 
 @dataclass
-class DnsConfig:
-    server: str
+class DnsZone:
     zone: str
-    port: int = 53
-
-    tsig_key_file: str | None = None
+    server: str
+    tsig_key_file: Optional[str] = None
 
 
 @dataclass
@@ -54,7 +52,7 @@ class ServiceConfig:
 @dataclass
 class RootConfig:
     dsm: DsmConfig
-    dns: DnsConfig
+    dns: list[DnsZone]
     certs: CertsConfig
 
 

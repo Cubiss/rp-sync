@@ -9,20 +9,11 @@ from .models import ServiceConfig
 
 SERVICES_ENV = "RP_SYNC_SERVICES_PATH"
 DEFAULT_SERVICES_PATH = "./services/"
-CONFIG_ENV = "RP_SYNC_CONFIG_PATH"
-DEFAULT_CONFIG_PATH = "./config.yaml"
 
 SERVICE_FILE_SUFFIX = ".service"
 
 
 def get_services_path() -> str:
-    """Return the path (file or directory) that holds service definitions.
-
-    Resolution order:
-      1. RP_SYNC_SERVICES_PATH env var
-      2. RP_SYNC_CONFIG_PATH env var
-      3. ./config.yaml
-    """
     return os.environ.get(SERVICES_ENV, DEFAULT_SERVICES_PATH)
 
 
@@ -34,18 +25,8 @@ def _load_yaml(path: str) -> Dict[str, Any] | List[Dict[str, Any]] | None:
 def _services_from_raw(
     raw: Dict[str, Any] | List[Dict[str, Any]] | None,
 ) -> List[Dict[str, Any]]:
-    """Normalize services from a YAML document.
-
-    Supported structures:
-      - {"services": [ {...}, {...} ]}
-      - [ {...}, {...} ]
-    """
     if raw is None:
         return []
-
-    if isinstance(raw, dict):
-        seq = raw.get("services", [])
-        return list(seq) if isinstance(seq, list) else []
 
     if isinstance(raw, list):
         return raw

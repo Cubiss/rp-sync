@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 import yaml
 
-from .models import RootConfig, DsmConfig, DnsConfig, CertsConfig
+from .models import RootConfig, DsmConfig, DnsZone, CertsConfig
 
 APP_NAME = "rp-sync"
 
@@ -42,7 +42,6 @@ def _load_core_raw(path: str | None = None) -> Dict[str, Any]:
 
 
 def load_root_config(path: str | None = None) -> RootConfig:
-    """Load only the 'root' config (dsm/dns/certs), no services."""
     raw = _load_core_raw(path)
 
     dsm_raw = raw["dsm"]
@@ -58,12 +57,17 @@ def load_root_config(path: str | None = None) -> RootConfig:
         password_file=dsm_raw["password_file"],
     )
 
-    dns = DnsConfig(
-        server=dns_raw["server"],
-        zone=dns_raw["zone"],
-        port=dns_raw.get("port", 53),
-        tsig_key_file=dns_raw["tsig_key_file"],
-    )
+    dns_zones: list[DnsZone] = []
+
+    for z_raw in dns_raw:
+        server = z_raw["server"]
+        dns_zones.append(
+            DnsZone(
+                zone=z_raw["zone"],
+                server=server,
+                tsig_key_file=z_raw.get("tsig_key_file"),
+            )
+        )
 
     certs = CertsConfig(
         disabled=certs_raw.get("disabled", False),
@@ -75,7 +79,7 @@ def load_root_config(path: str | None = None) -> RootConfig:
         root_ca=certs_raw.get("root_ca"),
     )
 
-    return RootConfig(dsm=dsm, dns=dns, certs=certs)
+    return RootConfig(dsm=dsm, dns=dns_zones, certs=certs)
 
 
 def load_config(path: str | None = None) -> RootConfig:

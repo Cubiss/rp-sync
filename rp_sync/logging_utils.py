@@ -63,7 +63,7 @@ class Logger:
         inst = cls(
             app_name=APP_NAME,
             log_level=os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL),
-            keep=os.environ.get(LOG_KEEP, DEFAULT_LOG_KEEP),
+            keep=int(os.environ.get(LOG_KEEP, DEFAULT_LOG_KEEP)),
             log_dir=os.environ.get(LOG_DIR, DEFAULT_LOG_DIR),
         )
         cls._instances[key] = inst
