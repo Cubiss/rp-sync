@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import logging
-from logging import debug
-
 from .logging_utils import Logger
 from .models import DsmConfig, ReverseProxyRule
 from typing import List, Optional, Dict, Any
 
 import json
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import re
 
 
@@ -396,7 +393,8 @@ class DsmReverseProxyClient:
 
     API = "SYNO.Core.AppPortal.ReverseProxy"
     VERSION = 1
-    PATH = "/webapi/entry.cgi/SYNO.Core.AppPortal.ReverseProxy"
+    # PATH = "/webapi/entry.cgi/SYNO.Core.AppPortal.ReverseProxy"
+    PATH = "/webapi/entry.cgi"
 
     def __init__(self, session: "DsmSession", logger: Logger) -> None:
         self.session = session
@@ -508,11 +506,13 @@ class DsmReverseProxyClient:
         if existing is None:
             # Create new
             payload = {"entry": json.dumps(entry)}
-            self._call("create", **payload)
-            self.logger.info(f"[DSM] Created reverse-proxy rule for {rule.src_host}:{rule.src_port}")
+            resp = self._call("create", **payload)
         else:
             # Update existing – DSM expects UUID to identify the rule
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
-            self._call("set", **payload)
-            self.logger.info(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")
+            resp = self._call("set", **payload)
+
+        if not resp.get("success"):
+            raise RuntimeError(f"DSM ReverseProxy/set failed: {resp}")
+        self.logger.info(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")
