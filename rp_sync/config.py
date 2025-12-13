@@ -76,6 +76,7 @@ def load_root_config(path: str | None = None) -> RootConfig:
         provisioner=certs_raw.get("provisioner", ""),
         provisioner_password_file=certs_raw.get("provisioner_password_file"),
         default_ltl_hours=int(certs_raw.get("default_ltl_hours", 2160)),
+        renew_before_hours=int(certs_raw.get("renew_before_hours", 168)),
         root_ca=certs_raw.get("root_ca"),
     )
 

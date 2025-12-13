@@ -31,6 +31,7 @@ class CertsConfig:
     provisioner: str = ""
     provisioner_password_file: Optional[str] = None
     default_ltl_hours: int = 2160
+    renew_before_hours: int = 168
     root_ca: Optional[str] = None
 
     @property

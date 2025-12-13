@@ -6,6 +6,8 @@ from typing import List, Optional, Dict, Any
 
 import json
 import requests
+from datetime import datetime, timezone
+import re
 
 
 def _read_secret(path: str) -> str:
@@ -107,6 +109,88 @@ class DsmCertificateClient:
     def __init__(self, dsm: DsmSession, logger: Logger):
         self.dsm = dsm
         self.logger = logger
+
+    # --- helpers for "don't renew unless needed" ---
+
+    @staticmethod
+    def _parse_expiry_dt(cert: Dict[str, Any]) -> Optional[datetime]:
+        """
+        Best-effort parse of expiry from various DSM builds.
+        Returns an aware UTC datetime if possible, else None.
+        """
+        for key in (
+            "valid_till",
+            "valid_to",
+            "valid_until",
+            "not_after",
+            "notAfter",
+            "expire_time",
+            "expiry",
+        ):
+            if key not in cert:
+                continue
+            v = cert.get(key)
+            if v is None:
+                continue
+
+            # epoch seconds or ms
+            if isinstance(v, (int, float)):
+                ts = float(v)
+                if ts > 10_000_000_000:  # likely ms
+                    ts = ts / 1000.0
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+            if isinstance(v, str):
+                s = v.strip()
+                if not s:
+                    continue
+                # common cases: "YYYY-MM-DD HH:MM:SS", ISO, or includes "Z"
+                s = s.replace("Z", "+00:00")
+                # If it's "YYYY-MM-DD HH:MM:SS" (no T), make it ISO-ish
+                if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s):
+                    s = s.replace(" ", "T", 1)
+                try:
+                    dt = datetime.fromisoformat(s)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.astimezone(timezone.utc)
+                except Exception:
+                    continue
+
+        return None
+
+    def expires_within_hours(self, cert: Dict[str, Any], hours: int) -> bool:
+        # Some DSM responses include a validity flag
+        if cert.get("is_valid") is False:
+            return True
+
+        dt = self._parse_expiry_dt(cert)
+        if dt is None:
+            # Can't safely prove it's not expiring; treat as "needs attention"
+            return True
+
+        now = datetime.now(timezone.utc)
+        return dt <= (now + timedelta(hours=hours))
+
+    def is_assigned_to_reverse_proxy_hosts(self, cert_name: str, hostnames: list[str]) -> bool:
+        """
+        True if the certificate is currently bound (via ReverseProxy services)
+        to *all* requested hostnames.
+        """
+        target = self.find_certificate_by_name(cert_name)
+        if not target:
+            return False
+
+        wanted = set(hostnames)
+        found: set[str] = set()
+        for svc in target.get("services", []):
+            if svc.get("subscriber") != "ReverseProxy":
+                continue
+            dn = svc.get("display_name")
+            if dn in wanted:
+                found.add(dn)
+
+        return wanted.issubset(found)
 
     def list_certificates(self) -> List[Dict[str, Any]]:
         # Use POST, DSM behaves like the UI: /webapi/entry.cgi with form data
@@ -331,7 +415,10 @@ class DsmReverseProxyClient:
             "method": method,
             **params,
         }
-        return self.session.post(self.PATH, data)
+        self.logger.debug(f"[DSM] Calling {method} with params: {params}")
+        resp = self.session.post(self.PATH, data)
+        self.logger.debug(f"[DSM] Response: {resp}")
+        return resp
 
     # ---------- public API ----------
 
@@ -418,11 +505,11 @@ class DsmReverseProxyClient:
         if existing is None:
             # Create new
             payload = {"entry": json.dumps(entry)}
-            self._call("create", **payload)
+            resp = self._call("create", **payload)
             self.logger.info(f"[DSM] Created reverse-proxy rule for {rule.src_host}:{rule.src_port}")
         else:
             # Update existing – DSM expects UUID to identify the rule
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
-            self._call("set", **payload)
+            resp = self._call("set", **payload)
             self.logger.info(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")

@@ -88,6 +88,38 @@ class SyncOrchestrator:
             sans = all_hosts
             dsm_cert_name = f"rp-sync-{svc.name}"
 
+            existing = self.ctx.dsm_certs.find_certificate_by_name(dsm_cert_name)
+            renew_window_h = int(getattr(self.ctx.cfg.certs, "renew_before_hours", 168))
+
+            if existing:
+                assigned = self.ctx.dsm_certs.is_assigned_to_reverse_proxy_hosts(
+                    dsm_cert_name, hostnames=all_hosts
+                )
+                expiring = self.ctx.dsm_certs.expires_within_hours(existing, hours=renew_window_h)
+
+                if (not expiring) and assigned:
+                    self.logger.info(
+                        f"[TLS] '{dsm_cert_name}' already valid and assigned to all hosts; "
+                        f"skipping issuance/import"
+                    )
+                    return
+
+                if (not expiring) and (not assigned):
+                    self.logger.info(
+                        f"[TLS] '{dsm_cert_name}' valid but not assigned everywhere; "
+                        f"assigning only (no re-issue)"
+                    )
+                    self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(
+                        dsm_cert_name,
+                        hostnames=all_hosts,
+                    )
+                    return
+
+                self.logger.info(
+                    f"[TLS] '{dsm_cert_name}' exists but expiring soon (<= {renew_window_h}h); renewing"
+                )
+
+            # Missing cert OR expiring soon => issue + import/replace + assign
             tmp_dir = Path("/tmp")
             cert_path = tmp_dir / f"{svc.name}.crt"
             key_path = tmp_dir / f"{svc.name}.key"
