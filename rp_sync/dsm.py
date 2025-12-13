@@ -416,7 +416,7 @@ class DsmReverseProxyClient:
             "method": method,
             **params,
         }
-        self.logger.debug(f"[DSM] Calling {method} with params: {json.dumps(params)}")
+        self.logger.debug(f"[DSM] Calling {method} with params: {params}")
         resp = self.session.post(self.PATH, data)
         self.logger.debug(f"[DSM] Response: {json.dumps(resp)}")
         return resp
