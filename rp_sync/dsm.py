@@ -393,8 +393,8 @@ class DsmReverseProxyClient:
 
     API = "SYNO.Core.AppPortal.ReverseProxy"
     VERSION = 1
-    # PATH = "/webapi/entry.cgi/SYNO.Core.AppPortal.ReverseProxy"
-    PATH = "/webapi/entry.cgi"
+    PATH = "/webapi/entry.cgi/SYNO.Core.AppPortal.ReverseProxy"
+    # PATH = "/webapi/entry.cgi"
 
     def __init__(self, session: "DsmSession", logger: Logger) -> None:
         self.session = session
@@ -416,9 +416,9 @@ class DsmReverseProxyClient:
             "method": method,
             **params,
         }
-        self.logger.debug(f"[DSM] Calling {method} with params: {params}")
+        self.logger.debug(f"[DSM] Calling {method} with params: {json.dumps(params)}")
         resp = self.session.post(self.PATH, data)
-        self.logger.debug(f"[DSM] Response: {resp}")
+        self.logger.debug(f"[DSM] Response: {json.dumps(resp)}")
         return resp
 
     # ---------- public API ----------
