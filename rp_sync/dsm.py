@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from logging import debug
+
 from .logging_utils import Logger
 from .models import DsmConfig, ReverseProxyRule
 from typing import List, Optional, Dict, Any
@@ -505,11 +508,11 @@ class DsmReverseProxyClient:
         if existing is None:
             # Create new
             payload = {"entry": json.dumps(entry)}
-            resp = self._call("create", **payload)
+            self._call("create", **payload)
             self.logger.info(f"[DSM] Created reverse-proxy rule for {rule.src_host}:{rule.src_port}")
         else:
             # Update existing – DSM expects UUID to identify the rule
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
-            resp = self._call("set", **payload)
+            self._call("set", **payload)
             self.logger.info(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")

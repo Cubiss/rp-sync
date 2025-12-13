@@ -14,6 +14,8 @@ def main() -> None:
     watcher = Watcher.from_core_config(logger, config)
 
     if "--watch" in sys.argv:
+        logger.info(f"Test INFO")
+        logger.debug(f"Test DEBUG")
         logger.info("Starting in watcher mode.")
         watcher.watch()
     else:
