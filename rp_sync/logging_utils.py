@@ -4,6 +4,8 @@ import logging
 
 import os
 import sys
+import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -146,3 +148,49 @@ class Logger:
 
     def log(self, level, msg, *args, **kwargs):
         self.logger.log(level, msg, *args, **kwargs)
+
+
+    def install_exception_logging(self: Logger) -> None:
+        def _log(exc_type, exc, tb, where: str = "") -> None:
+            # Avoid noisy logs for normal exits / Ctrl+C
+            if exc_type in (KeyboardInterrupt, SystemExit):
+                return
+
+            log_exception = getattr(self, "exception", None)
+            if callable(log_exception):
+                log_exception(
+                    f"Unhandled exception{where}",
+                    exc_info=(exc_type, exc, tb),
+                )
+            else:
+                formatted = "".join(traceback.format_exception(exc_type, exc, tb))
+                log_error = getattr(self, "error", None)
+                if callable(log_error):
+                    log_error(f"Unhandled exception{where}\n{formatted}")
+                else:
+                    # last resort
+                    sys.stderr.write(f"Unhandled exception{where}\n{formatted}\n")
+
+        def _sys_excepthook(exc_type, exc, tb) -> None:
+            _log(exc_type, exc, tb)
+            # Preserve default behavior (still prints to stderr)
+            sys.__excepthook__(exc_type, exc, tb)
+
+        sys.excepthook = _sys_excepthook
+
+        if hasattr(threading, "excepthook"):
+
+            def _thread_excepthook(args) -> None:
+                _log(
+                    args.exc_type,
+                    args.exc_value,
+                    args.exc_traceback,
+                    where=f" in thread {args.thread.name!r}",
+                )
+                # Preserve default behavior if available
+                try:
+                    threading.__excepthook__(args)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+            threading.excepthook = _thread_excepthook
