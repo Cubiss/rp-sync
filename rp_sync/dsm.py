@@ -511,7 +511,7 @@ class DsmReverseProxyClient:
             # Update existing – DSM expects UUID to identify the rule
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
-            resp = self._call("set", **payload)
+            resp = self._call("update", **payload)
 
         if not resp.get("success"):
             raise RuntimeError(f"DSM ReverseProxy/set failed: {resp}")
