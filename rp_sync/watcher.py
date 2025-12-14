@@ -122,7 +122,7 @@ class Watcher:
     def _write_health(self, ok: bool, error_text: Optional[str] = None) -> None:
         """Write a tiny status file for the Docker healthcheck."""
         path = self._get_health_path()
-        self.logger.debug(f'Writing OK: {ok}, error_text{error_text} into {path}')
+        self.logger.debug(f"Writing OK: {ok}, error_text{error_text} into {path}")
         try:
             directory = os.path.dirname(path)
             if directory:

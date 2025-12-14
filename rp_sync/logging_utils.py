@@ -149,7 +149,6 @@ class Logger:
     def log(self, level, msg, *args, **kwargs):
         self.logger.log(level, msg, *args, **kwargs)
 
-
     def install_exception_logging(self: Logger) -> None:
         def _log(exc_type, exc, tb, where: str = "") -> None:
             # Avoid noisy logs for normal exits / Ctrl+C

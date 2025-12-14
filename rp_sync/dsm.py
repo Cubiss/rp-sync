@@ -117,7 +117,6 @@ class DsmCertificateClient:
         Best-effort parse of expiry from various DSM builds.
         Returns an aware UTC datetime if possible, else None.
         """
-
         self.logger.debug(cert)
 
         for key in (
@@ -131,6 +130,7 @@ class DsmCertificateClient:
         ):
             if key not in cert:
                 continue
+
             v = cert.get(key)
             if v is None:
                 continue
@@ -142,22 +142,53 @@ class DsmCertificateClient:
                     ts = ts / 1000.0
                 return datetime.fromtimestamp(ts, tz=timezone.utc)
 
-            if isinstance(v, str):
-                s = v.strip()
-                if not s:
-                    continue
-                # common cases: "YYYY-MM-DD HH:MM:SS", ISO, or includes "Z"
-                s = s.replace("Z", "+00:00")
-                # If it's "YYYY-MM-DD HH:MM:SS" (no T), make it ISO-ish
-                if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s):
-                    s = s.replace(" ", "T", 1)
+            if not isinstance(v, str):
+                continue
+
+            s = v.strip()
+            if not s:
+                continue
+
+            # epoch seconds/ms as a *string*
+            if re.fullmatch(r"\d+", s):
+                ts = float(s)
+                if ts > 10_000_000_000:  # likely ms
+                    ts = ts / 1000.0
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+            # Normalize "Z" suffix to ISO offset
+            s_iso = s.replace("Z", "+00:00")
+
+            # If it's "YYYY-MM-DD HH:MM:SS" (no T), make it ISO-ish
+            if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s_iso):
+                s_iso = s_iso.replace(" ", "T", 1)
+
+            # 1) Try ISO first
+            try:
+                dt = datetime.fromisoformat(s_iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc)
+            except Exception:
+                pass
+
+            # 2) Try DSM/OpenSSL-ish: "Mar 14 00:46:33 2026 GMT"
+            # Python's %Z parsing is platform-dependent; treat GMT/UTC as UTC explicitly.
+            m = re.match(
+                r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+"
+                r"(?P<hms>\d{2}:\d{2}:\d{2})\s+(?P<year>\d{4})"
+                r"(?:\s+(?P<tz>[A-Za-z]{3,4}))?$",
+                s,
+            )
+            if m:
+                tz = (m.group("tz") or "").upper()
+                base = f"{m.group('mon')} {m.group('day')} {m.group('hms')} {m.group('year')}"
                 try:
-                    dt = datetime.fromisoformat(s)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt.astimezone(timezone.utc)
+                    dt = datetime.strptime(base, "%b %d %H:%M:%S %Y")
+                    if tz in ("GMT", "UTC", ""):
+                        return dt.replace(tzinfo=timezone.utc)
                 except Exception:
-                    continue
+                    pass
 
         return None
 
