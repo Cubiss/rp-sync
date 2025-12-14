@@ -29,7 +29,7 @@ class Logger:
         app_name: str = APP_NAME,
         log_level: str = "INFO",
         keep: int = 10,
-        log_dir: Optional[Path] = "./logs",
+        log_dir: Optional[Path|str] = "./logs",
     ):
         self.app_name = app_name
         self.keep = keep
@@ -50,18 +50,12 @@ class Logger:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-        # Idempotent: only add our file handlers once per process
-        if not any(
-            isinstance(h, logging.FileHandler) and getattr(h, "_app_file", False)
-            for h in self.logger.handlers
-        ):
+        if not self._has_app_file_handlers():
             self._add_file_handlers()
 
         self._prune_old_logs()
 
         self.logger.debug(f"Logging initialized -> {self.file_path}")
-
-    # ---------- public helpers ----------
 
     @classmethod
     def from_env(cls) -> Logger:
@@ -97,7 +91,13 @@ class Logger:
             ch._app_console = True
             self.logger.addHandler(ch)
 
-    # ---------- internals ----------
+
+    def _has_app_file_handlers(self) -> bool:
+        return any(
+            isinstance(h, logging.FileHandler) and getattr(h, "_app_file", False)
+            for h in self.logger.handlers
+        )
+
     def _add_file_handlers(self) -> None:
         """
         Two file handlers:
@@ -107,8 +107,9 @@ class Logger:
         for path, mode in [(self.file_path, "a"), (self.latest_path, "w")]:
             fh = logging.FileHandler(path, encoding="utf-8", mode=mode)
             fh.setFormatter(self._base_fmt)
-            fh.setLevel(logging.DEBUG)  # capture everything to disk
-            fh._app_file = True  # marker to avoid duplicates
+            # TODO: Let's introduce latest.debug.log that will always capture DEBUG, make current/latest follow the configured log level
+            fh.setLevel(logging.DEBUG)
+            fh._app_file = True
             self.logger.addHandler(fh)
 
     def _prune_old_logs(self) -> None:
@@ -120,14 +121,11 @@ class Logger:
         pattern = f"{self.app_name}_*.log"
         files = sorted(self.log_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
         for old in files[self.keep :]:
-            # noinspection PyBroadException
             try:
                 old.unlink(missing_ok=True)
             except Exception:
-                # Best-effort; ignore locked files
                 pass
 
-    # Delegate logging methods to the wrapped logger
     def debug(self, msg, *args, **kwargs):
         self.logger.debug(msg, *args, **kwargs)
 
@@ -151,7 +149,7 @@ class Logger:
 
     def install_exception_logging(self: Logger) -> None:
         def _log(exc_type, exc, tb, where: str = "") -> None:
-            # Avoid noisy logs for normal exits / Ctrl+C
+            # TODO: any other common "non-error" exceptions I might want to ignore?
             if exc_type in (KeyboardInterrupt, SystemExit):
                 return
 
@@ -163,22 +161,23 @@ class Logger:
                 )
             else:
                 formatted = "".join(traceback.format_exception(exc_type, exc, tb))
+
+                # TODO: any reason to guard this given this class implements error?
                 log_error = getattr(self, "error", None)
                 if callable(log_error):
                     log_error(f"Unhandled exception{where}\n{formatted}")
                 else:
-                    # last resort
                     sys.stderr.write(f"Unhandled exception{where}\n{formatted}\n")
 
         def _sys_excepthook(exc_type, exc, tb) -> None:
             _log(exc_type, exc, tb)
-            # Preserve default behavior (still prints to stderr)
             sys.__excepthook__(exc_type, exc, tb)
 
         sys.excepthook = _sys_excepthook
 
         if hasattr(threading, "excepthook"):
-
+            # TODO: Any reason to guard this given requires-python = ">=3.11"?
+            default_thread_excepthook = getattr(threading, "__excepthook__", None)
             def _thread_excepthook(args) -> None:
                 _log(
                     args.exc_type,
@@ -186,10 +185,7 @@ class Logger:
                     args.exc_traceback,
                     where=f" in thread {args.thread.name!r}",
                 )
-                # Preserve default behavior if available
-                try:
-                    threading.__excepthook__(args)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+                if callable(default_thread_excepthook):
+                    default_thread_excepthook(args)
 
             threading.excepthook = _thread_excepthook

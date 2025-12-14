@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import json
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+import requests
+
 from .logging_utils import Logger
 from .models import DsmConfig, ReverseProxyRule
-from typing import List, Optional, Dict, Any
-
-import json
-import requests
-from datetime import datetime, timezone, timedelta
-import re
 
 
 def _read_secret(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read().strip()
+
+
+def _to_utc_datetime_from_unix_timestamp(ts: float) -> datetime:
+    """Convert seconds (or milliseconds) since epoch to an aware UTC datetime."""
+    if ts > 10_000_000_000:
+        ts = ts / 1000.0
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
 
 
 class DsmSession:
@@ -30,7 +38,6 @@ class DsmSession:
         return f"{self.base}{path}"
 
     def login(self, username: str, password: str) -> None:
-        # Discover auth path
         info_resp = self.session.get(
             self.url("/webapi/query.cgi"),
             params={
@@ -46,7 +53,6 @@ class DsmSession:
         auth_path = auth_info["path"]
         auth_ver = auth_info.get("maxVersion", auth_info.get("version", 1))
 
-        # Login and request synotoken
         login_resp = self.session.get(
             self.url(f"/webapi/{auth_path}"),
             params={
@@ -68,17 +74,14 @@ class DsmSession:
 
         d = data["data"]
         self.sid = d["sid"]
-        # token field name can vary a bit by build
         self.synotoken = d.get("synotoken") or d.get("SynoToken")
 
         if not self.synotoken:
             raise RuntimeError("DSM login did not return synotoken; cannot call core APIs")
 
-        # Attach as header like the DSM UI does
         self.session.headers.update(
             {
                 "X-SYNO-TOKEN": self.synotoken,
-                # optional but matches UI
                 "X-Requested-With": "XMLHttpRequest",
             }
         )
@@ -87,7 +90,6 @@ class DsmSession:
         params: dict[str, str] = {}
         if self.sid:
             params["_sid"] = self.sid
-        # some builds also expect SynoToken in body; harmless to send both
         if self.synotoken:
             params["SynoToken"] = self.synotoken
         return params
@@ -110,8 +112,7 @@ class DsmCertificateClient:
         self.dsm = dsm
         self.logger = logger
 
-    # --- helpers for "don't renew unless needed" ---
-
+    # TODO: This seems unnecessarily complicated/broad - Gather debug information for my test setup (latest DSM)
     def _parse_expiry_dt(self, cert: Dict[str, Any]) -> Optional[datetime]:
         """
         Best-effort parse of expiry from various DSM builds.
@@ -134,12 +135,8 @@ class DsmCertificateClient:
             if v is None:
                 continue
 
-            # epoch seconds or ms
             if isinstance(v, (int, float)):
-                ts = float(v)
-                if ts > 10_000_000_000:  # likely ms
-                    ts = ts / 1000.0
-                return datetime.fromtimestamp(ts, tz=timezone.utc)
+                return _to_utc_datetime_from_unix_timestamp(float(v))
 
             if not isinstance(v, str):
                 continue
@@ -148,21 +145,14 @@ class DsmCertificateClient:
             if not s:
                 continue
 
-            # epoch seconds/ms as a *string*
             if re.fullmatch(r"\d+", s):
-                ts = float(s)
-                if ts > 10_000_000_000:  # likely ms
-                    ts = ts / 1000.0
-                return datetime.fromtimestamp(ts, tz=timezone.utc)
+                return _to_utc_datetime_from_unix_timestamp(float(s))
 
-            # Normalize "Z" suffix to ISO offset
             s_iso = s.replace("Z", "+00:00")
 
-            # If it's "YYYY-MM-DD HH:MM:SS" (no T), make it ISO-ish
             if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s_iso):
                 s_iso = s_iso.replace(" ", "T", 1)
 
-            # 1) Try ISO first
             try:
                 dt = datetime.fromisoformat(s_iso)
                 if dt.tzinfo is None:
@@ -171,8 +161,6 @@ class DsmCertificateClient:
             except Exception:
                 pass
 
-            # 2) Try DSM/OpenSSL-ish: "Mar 14 00:46:33 2026 GMT"
-            # Python's %Z parsing is platform-dependent; treat GMT/UTC as UTC explicitly.
             m = re.match(
                 r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+"
                 r"(?P<hms>\d{2}:\d{2}:\d{2})\s+(?P<year>\d{4})"
@@ -192,7 +180,6 @@ class DsmCertificateClient:
         return None
 
     def expires_within_hours(self, cert: Dict[str, Any], hours: int) -> bool:
-        # Some DSM responses include a validity flag
         if cert.get("is_valid") is False:
             return True
 
@@ -225,7 +212,6 @@ class DsmCertificateClient:
         return wanted.issubset(found)
 
     def list_certificates(self) -> List[Dict[str, Any]]:
-        # Use POST, DSM behaves like the UI: /webapi/entry.cgi with form data
         data = self.dsm.post(
             "/webapi/entry.cgi",
             {
@@ -253,7 +239,6 @@ class DsmCertificateClient:
         - `name` is the description you see in DSM UI.
         - `full_cert_pem` may contain a chain; we split it into leaf + intermediates.
         """
-        # 1) Split leaf vs chain
         leaf_pem, chain_pem = _split_cert_and_chain(full_cert_pem)
         if chain_pem is None:
             raise RuntimeError(
@@ -261,11 +246,9 @@ class DsmCertificateClient:
                 "DSM expects an 'inter_cert' payload."
             )
 
-        # 2) Find existing cert (if any)
         existing = self.find_certificate_by_name(name)
         existing_id = existing["id"] if existing else None
 
-        # 3) Build multipart form
         params = {
             "api": "SYNO.Core.Certificate",
             "method": "import",
@@ -315,13 +298,11 @@ class DsmCertificateClient:
         if not hostnames:
             return
 
-        # 1) Find the target certificate
         target = self.find_certificate_by_name(cert_name)
         if not target:
             raise RuntimeError(f"Certificate '{cert_name}' not found in DSM")
         target_id = target["id"]
 
-        # 2) Build settings by scanning all certs' services
         all_certs = self.list_certificates()
         wanted = set(hostnames)
         settings: list[dict[str, Any]] = []
@@ -335,7 +316,6 @@ class DsmCertificateClient:
                 if display_name not in wanted:
                     continue
 
-                # If already bound to the target cert, nothing to do for this one
                 if cert_id == target_id:
                     continue
 
@@ -351,7 +331,6 @@ class DsmCertificateClient:
             self.logger.info(f"[DSM] No ReverseProxy service mappings changed for cert '{cert_name}'")
             return
 
-        # 3) Call SYNO.Core.Certificate.Service/set with JSON-encoded settings
         payload = {
             "api": "SYNO.Core.Certificate.Service",
             "method": "set",
@@ -398,11 +377,9 @@ def _split_cert_and_chain(pem: str) -> tuple[str, str | None]:
             current.append(line)
 
     if not blocks:
-        # Just return as-is; DSM will error if it really needed a chain
         return pem, None
 
     def join_block(block: list[str]) -> str:
-        # Ensure trailing newline – DSM is picky but tolerant.
         return "\n".join(block) + "\n"
 
     leaf = join_block(blocks[0])
@@ -426,20 +403,15 @@ class DsmReverseProxyClient:
     API = "SYNO.Core.AppPortal.ReverseProxy"
     VERSION = 1
     PATH = "/webapi/entry.cgi/SYNO.Core.AppPortal.ReverseProxy"
-    # PATH = "/webapi/entry.cgi"
 
     def __init__(self, session: "DsmSession", logger: Logger) -> None:
         self.session = session
         self.logger = logger
 
-    # ---------- helpers ----------
-
     @staticmethod
     def _scheme_to_proto(s: str) -> int:
-        # DSM uses 0 = http, 1 = https
+        # TODO: refactor, 0 should be explicitly for http. Add support for any other desirable schemes and fail for unsupported
         return 1 if s.lower() == "https" else 0
-
-    # ---------- low-level calls ----------
 
     def _call(self, method: str, **params) -> dict:
         data = {
@@ -453,8 +425,7 @@ class DsmReverseProxyClient:
         self.logger.debug(f"[DSM] Response: {json.dumps(resp)}")
         return resp
 
-    # ---------- public API ----------
-
+    # TODO: debug log should contain requests/responses."Shape is roughly" is a bit pointless.
     def list_rules(self) -> list[dict]:
         """
         Return raw rule objects as DSM sends them.
@@ -480,10 +451,10 @@ class DsmReverseProxyClient:
             }
         """
         resp = self._call("list")
-        # DSM sometimes uses "entries" or "items" in different builds
-        data = resp.get("data", resp)
+        data = resp.get("data") or resp
         return data.get("entries") or data.get("items") or data.get("rules") or []
 
+    # TODO: debug log should contain requests/responses.
     def upsert_rule(self, rule: ReverseProxyRule) -> None:
         """
         Create or update a reverse-proxy rule for one hostname.
@@ -505,9 +476,7 @@ class DsmReverseProxyClient:
                 existing = r
                 break
 
-        # Build an "entry" object in the same shape DSM returns.
         entry = {
-            # description appears as the name in the UI
             "description": rule.description,
             "backend": {
                 "fqdn": rule.dst_host,
@@ -519,15 +488,12 @@ class DsmReverseProxyClient:
                 "fqdn": rule.src_host,
                 "port": int(rule.src_port),
                 "protocol": self._scheme_to_proto(rule.src_protocol),
-                # DSM stores HTTPS-specific flags here.
-                # For plain HTTP frontends DSM just ignores this.
                 "https": {
                     "hsts": False,
                 },
             },
             "customize_headers": [],
             "enable": bool(rule.enabled),
-            # Reasonable timeouts / defaults; tweak if you like.
             "proxy_http_version": 1,
             "proxy_connect_timeout": 60,
             "proxy_read_timeout": 60,
@@ -536,11 +502,9 @@ class DsmReverseProxyClient:
         }
 
         if existing is None:
-            # Create new
             payload = {"entry": json.dumps(entry)}
             resp = self._call("create", **payload)
         else:
-            # Update existing – DSM expects UUID to identify the rule
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
             resp = self._call("update", **payload)

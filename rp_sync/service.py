@@ -38,7 +38,8 @@ def _load_services_from_file(path: str) -> List[Dict[str, Any]]:
     raw = _load_yaml(path)
     return _services_from_raw(raw)
 
-
+# TODO: make this search for .service files in subdirectories recursively.
+# TODO: capture the path where service config was loaded from and utilize it in logs
 def _load_services_from_directory(path: str) -> List[Dict[str, Any]]:
     """Load services from all *.service files in a directory."""
     services: List[Dict[str, Any]] = []
@@ -53,8 +54,7 @@ def _load_services_from_directory(path: str) -> List[Dict[str, Any]]:
         return []
 
     for entry in entries:
-        doc = _load_yaml(entry.path)
-        services.extend(_services_from_raw(doc))
+        services.extend(_load_services_from_file(entry.path))
 
     return services
 
@@ -71,7 +71,6 @@ def load_services(path: Optional[str] = None) -> List[ServiceConfig]:
     """
     services_path = path or get_services_path()
 
-    # Decide whether it's a directory of *.service files or a single file
     if os.path.isdir(services_path):
         raw_services = _load_services_from_directory(services_path)
     else:

@@ -4,7 +4,8 @@ import os
 import signal
 import threading
 import traceback
-from typing import Optional, Tuple, List
+from types import FrameType
+from typing import Optional, Tuple, List, Dict
 
 from .config import (
     load_root_config,
@@ -15,7 +16,7 @@ from .config import (
 )
 from .dns_updater import DnsUpdater
 from .logging_utils import Logger
-from .models import RootConfig
+from .models import RootConfig, ServiceConfig
 from .step_ca import StepCAClient
 from .dsm import DsmSession, DsmCertificateClient, _read_secret, DsmReverseProxyClient
 from .orchestrator import SyncContext, SyncOrchestrator
@@ -63,8 +64,6 @@ class Watcher:
         self._stop_event = threading.Event()
         self._register_signal_handlers()
 
-    # ----- static construction helpers ---------------------------------- #
-
     @staticmethod
     def _init_connectors(
         logger: Logger,
@@ -104,8 +103,6 @@ class Watcher:
         core_cfg = load_root_config()
         return Watcher.from_core_config(logger, core_cfg)
 
-    # ----- internals ----------------------------------------------------- #
-
     def _register_signal_handlers(self) -> None:
         signal.signal(signal.SIGTERM, self._handle_stop)
         signal.signal(signal.SIGINT, self._handle_stop)
@@ -113,7 +110,7 @@ class Watcher:
             "[watcher] Registered signal handlers for SIGTERM and SIGINT " "(Docker stop and Ctrl+C)"
         )
 
-    def _handle_stop(self, signum, frame) -> None:  # type: ignore[override]
+    def _handle_stop(self, signum: int, frame: FrameType | None) -> None:
         self._stop_event.set()
 
     def _get_health_path(self) -> str:
@@ -122,7 +119,7 @@ class Watcher:
     def _write_health(self, ok: bool, error_text: Optional[str] = None) -> None:
         """Write a tiny status file for the Docker healthcheck."""
         path = self._get_health_path()
-        self.logger.debug(f"Writing OK: {ok}, error_text{error_text} into {path}")
+        self.logger.debug(f'Writing OK: {ok}, error_text{error_text} into {path}')
         try:
             directory = os.path.dirname(path)
             if directory:
@@ -166,7 +163,101 @@ class Watcher:
         except FileNotFoundError:
             return None
 
-    # ----- public API ---------------------------------------------------- #
+    def _list_service_files(self, services_path: str) -> List[str]:
+        """Return an ordered list of service config files.
+
+        - If *services_path* is a directory, returns all '*.service' files inside.
+        - If it's a file, returns just that file.
+        """
+        if os.path.isdir(services_path):
+            try:
+                with os.scandir(services_path) as it:
+                    files = [
+                        e.path
+                        for e in it
+                        if e.is_file() and e.name.endswith(SERVICE_FILE_SUFFIX)
+                    ]
+                return sorted(files)
+            except FileNotFoundError:
+                return []
+
+        if os.path.isfile(services_path):
+            return [services_path]
+
+        return []
+
+    def _get_service_file_state(self, services_path: str) -> Dict[str, float]:
+        """Map each service file path -> mtime (seconds)."""
+        state: Dict[str, float] = {}
+        for path in self._list_service_files(services_path):
+            try:
+                state[path] = os.path.getmtime(path)
+            except FileNotFoundError:
+                continue
+        return state
+
+    def _load_services_from_files(self, files: List[str]) -> List[ServiceConfig]:
+        """Load + merge services from a set of service config files.
+
+        If the same service name appears multiple times, the last occurrence wins
+        (deterministic because *files* is expected to be sorted).
+        """
+        services_by_name: Dict[str, ServiceConfig] = {}
+        for fpath in files:
+            for svc in load_services(fpath):
+                services_by_name[svc.name] = svc
+        return list(services_by_name.values())
+
+    def _handle_no_service_files(
+        self,
+        services_path: str,
+        force_first_run: bool,
+    ) -> tuple[bool, Dict[str, float]]:
+        if os.path.isdir(services_path):
+            msg = f"No '{SERVICE_FILE_SUFFIX}' files found in: {services_path}"
+            self.logger.info(f"[watcher] {msg}")
+            self._write_health(True)
+            return False, {}
+
+        msg = f"Service config not found: {services_path}"
+        self.logger.info(f"[watcher] {msg}")
+        self._write_health(False, msg)
+        return force_first_run, {}
+
+    def _plan_sync(
+        self,
+        changed_files: List[str],
+        removed_files: List[str],
+    ) -> tuple[Optional[List[ServiceConfig]], str]:
+        if removed_files:
+            removed = ", ".join(os.path.basename(p) for p in removed_files)
+            self.logger.warning(f"[watcher] Service file(s) removed ({removed}); running full sync")
+            return None, "full (file removal)"
+
+        touched = ", ".join(os.path.basename(p) for p in changed_files)
+        self.logger.info(f"[watcher] Detected change in: {touched}; running incremental sync")
+        services = self._load_services_from_files(changed_files)
+        return services, f"incremental ({len(changed_files)} file(s))"
+
+    def _execute_sync(self, services: Optional[List[ServiceConfig]], source: str) -> None:
+        try:
+            failed_services = self.run_sync(services=services, source=source)
+        except Exception:
+            tb = traceback.format_exc()
+            self.logger.error("[watcher] Sync failed:\n" + tb)
+            self._write_health(False, tb)
+            return
+
+        if not failed_services:
+            self.logger.info("[watcher] Sync succeeded")
+            self._write_health(True)
+            return
+        else:
+            services_str = ", ".join(sorted(failed_services))
+            msg = "Sync completed with errors for services: " + services_str
+
+        self.logger.warning("[watcher] " + msg)
+        self._write_health(False, msg)
 
     def watch(self) -> None:
         """Watch only the service configuration and run syncs on change.
@@ -176,72 +267,67 @@ class Watcher:
         services_path = get_services_path()
         poll_seconds = float(os.environ.get(POLL_ENV, str(DEFAULT_POLL_SECONDS)))
 
-        last_services_mtime: Optional[float] = None
+        last_state: Dict[str, float] = {}
 
         self.logger.info(f"[watcher] Services path:  {services_path}")
         self.logger.info(f"[watcher] Health file:    {self._get_health_path()}")
         self.logger.info(f"[watcher] Poll interval:  {poll_seconds}s")
 
-        # Run at least once, even if the files already exist
         force_first_run = True
 
         while not self._stop_event.is_set():
-            mtime = self._get_services_mtime(services_path)
+            state = self._get_service_file_state(services_path)
 
-            if mtime is None:
-                msg = f"Service config not found: {services_path}"
-                self.logger.info(f"[watcher] {msg}")
-                self._write_health(False, msg)
+            if not state:
+                force_first_run, last_state = self._handle_no_service_files(
+                    services_path,
+                    force_first_run,
+                )
             else:
-                if force_first_run or last_services_mtime is None or mtime != last_services_mtime:
-                    force_first_run = False
-                    last_services_mtime = mtime
-                    self.logger.info("[watcher] Detected services change, running sync...")
-                    try:
-                        ok, failed_services = self.run_sync()
-                    except Exception:
-                        tb = traceback.format_exc()
-                        self.logger.error("[watcher] Sync failed:\n" + tb)
-                        self._write_health(False, tb)
-                    else:
-                        if ok:
-                            self.logger.info("[watcher] Sync succeeded")
-                            self._write_health(True)
-                        else:
-                            if failed_services:
-                                services_str = ", ".join(sorted(failed_services))
-                                msg = "Sync completed with errors for services: " + services_str
-                            else:
-                                msg = "Sync completed with errors (some services failed)"
+                changed_files = sorted(
+                    [p for p, mt in state.items() if force_first_run or last_state.get(p) != mt]
+                )
+                removed_files = sorted([p for p in last_state.keys() if p not in state])
 
-                            self.logger.warning("[watcher] " + msg)
-                            self._write_health(False, msg)
+                if force_first_run or changed_files or removed_files:
+                    force_first_run = False
+                    last_state = state
+
+                    run_services, source = self._plan_sync(changed_files, removed_files)
+                    self._execute_sync(run_services, source)
 
             self._stop_event.wait(poll_seconds)
 
         self.logger.info("[watcher] Stop signal received – shutting down gracefully")
 
-    def run_sync(self) -> Tuple[bool, List[str]]:
+    def run_sync(
+        self,
+        services: Optional[List[ServiceConfig]] = None,
+        source: str = "full",
+    ) -> List[str]:
+        # TODO: Analyze the need for duplicate of Watcher._execute_sync / Watcher.run_sync / SyncOrchestrator.sync and their logging.
+
         """Perform a single sync run using the current services view.
 
-        - Reloads all services from the service path.
+        - If *services* is None, reloads all services from the service path.
+        - If *services* is provided, syncs only those services.
         - Reuses the already initialized connectors.
 
         Returns:
             (ok, failed_services)
         """
-        self.ctx.services = load_services()
+        if services is None:
+            self.ctx.services = load_services()
+        else:
+            self.ctx.services = services
 
-        self.logger.info("Starting sync run")
-        ok, failed_services = SyncOrchestrator(self.ctx, self.logger).sync()
+        self.logger.info(f"Starting sync run [{source}] ({len(self.ctx.services)} service(s))")
+        failed_services = SyncOrchestrator(self.ctx, self.logger).sync()
 
-        if ok:
+        if not failed_services:
             self.logger.info("Sync run completed successfully")
         else:
-            if failed_services:
-                services_str = ", ".join(sorted(failed_services))
-                self.logger.warning("Sync run completed with errors for services: " + services_str)
-            else:
-                self.logger.warning("Sync run completed with errors (some services failed)")
+            services_str = ", ".join(sorted(failed_services))
+            self.logger.warning("Sync run completed with errors for services: " + services_str)
 
-        return ok, failed_services
+        return failed_services

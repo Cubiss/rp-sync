@@ -1,5 +1,3 @@
-# Dockerfile for rp-sync
-
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -14,7 +12,6 @@ ENV RP_SYNC_LOG_DIR=/logs/ \
     RP_SYNC_HEALTH_FILE=/tmp/rp-sync-health \
     RP_SYNC_WATCH_INTERVAL_SEC=5.0
 
-# Install step-cli and minimal tooling
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
@@ -37,11 +34,7 @@ RUN pip install --no-cache-dir .
 
 VOLUME ["/config", "/secrets", "/certs", "/logs"]
 
-# Run the installed module's CLI
 CMD ["rp-sync", "--watch"]
-
-
-# Container is "healthy" only if the health file exists and the first line is exactly "healthy"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD test -f "$RP_SYNC_HEALTH_FILE" \
    && head -n1 "$RP_SYNC_HEALTH_FILE" | grep -qx "healthy"

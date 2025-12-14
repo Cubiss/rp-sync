@@ -10,13 +10,13 @@ services:
 
     environment:
       - RP_SYNC_CONFIG_PATH=/config/config.yaml
-      - RP_SYNC_SERVICES_PATH=/config/services        # NEW
-      - RP_SYNC_HEALTH_FILE=/health/rp-sync-health    # CHANGED
+      - RP_SYNC_SERVICES_PATH=/config/services
+      - RP_SYNC_HEALTH_FILE=/health/rp-sync-health
       - RP_SYNC_WATCH_INTERVAL_SEC=5
 
     volumes:
       - /volume1/docker/rp-sync/config/config.yaml:/config/config.yaml:ro
-      - /volume1/docker/rp-sync/config/services:/config/services:ro   # NEW
+      - /volume1/docker/rp-sync/config/services:/config/services:ro
       - /volume1/docker/rp-sync/secrets:/secrets:ro
       - /volume1/docker/rp-sync/certs:/certs:ro
       - /volume1/docker/rp-sync/logs:/logs:rw

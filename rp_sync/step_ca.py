@@ -45,7 +45,6 @@ class StepCAClient:
             f"--not-after={self.cfg.default_ltl_hours}h",
         ]
 
-        # add --root if configured
         if self.cfg.root_ca:
             cmd.extend(["--root", self.cfg.root_ca])
 

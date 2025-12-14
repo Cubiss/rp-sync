@@ -29,47 +29,38 @@ class SyncOrchestrator:
         self.ctx = ctx
         self.logger = logger
 
-    def sync(self) -> Tuple[bool, List[str]]:
-        """Run sync for all services.
-
-        Returns:
-            (ok, failed_services)
-            ok == True  -> all services synced
-            ok == False -> some services failed; their names are in failed_services
-        """
-        failed: List[str] = []
+    def sync(self) -> List[str]:
+        errors: List[str] = []
 
         for svc in self.ctx.services:
             try:
                 self._sync_service(svc)
             except Exception:
-                failed.append(svc.name)
+                errors.append(svc.name)
                 tb = traceback.format_exc()
                 self.logger.error(f"\n[orchestrator] Failed to sync service '{svc.name}':\n{tb}")
 
-        if failed:
-            self.logger.error("\nSome services failed to sync: " + ", ".join(sorted(failed)))
-            return False, failed
+        if errors:
+            self.logger.error("\nSome services failed to sync: " + ", ".join(sorted(errors)))
+            return errors
 
         self.logger.info("\nAll services processed successfully.")
-        return True, failed
+        return errors
 
     def _sync_service(self, svc: ServiceConfig) -> None:
-        all_hosts: List[str] = [svc.host] + svc.aliases
+        # TODO: Improve behavior of aliases. I already have a simple http->https redirect service, use it to redirect aliases to main hostname (instead of duplicate reverse proxy rules)
+        hostnames: List[str] = [svc.host, *svc.aliases]
 
         self.logger.info(f"\n=== Service: {svc.name} ===")
-        self.logger.info(f"Hosts: {', '.join(all_hosts)}")
+        self.logger.info(f"Hosts: {', '.join(hostnames)}")
         self.logger.info(f"Backend: {svc.dest_url}")
 
-        # 1) DNS
         if svc.dns_a:
-            for hostname in all_hosts:
+            for hostname in hostnames:
                 self.ctx.dns_updater.ensure_a_record(hostname, svc.dns_a)
 
-        # 2) Reverse Proxy
-        all_hosts = [svc.host, *svc.aliases]
-        for hostname in all_hosts:
-            protocol, host, port = parse_dest_url(svc.dest_url)
+        protocol, host, port = parse_dest_url(svc.dest_url)
+        for hostname in hostnames:
             rp_rule = ReverseProxyRule(
                 description=f"{svc.name} ({hostname})",
                 src_host=hostname,
@@ -81,11 +72,9 @@ class SyncOrchestrator:
             )
             self.ctx.dsm_rp.upsert_rule(rp_rule)
 
-        # 3) TLS via step-ca + DSM certs
         if self.ctx.step_ca.enabled and svc.source_protocol == "https":
-            all_hosts = [svc.host] + svc.aliases
             cn = svc.host
-            sans = all_hosts
+            sans = hostnames
             dsm_cert_name = f"rp-sync-{svc.name}"
 
             existing = self.ctx.dsm_certs.find_certificate_by_name(dsm_cert_name)
@@ -93,7 +82,7 @@ class SyncOrchestrator:
 
             if existing:
                 assigned = self.ctx.dsm_certs.is_assigned_to_reverse_proxy_hosts(
-                    dsm_cert_name, hostnames=all_hosts
+                    dsm_cert_name, hostnames=hostnames
                 )
                 expiring = self.ctx.dsm_certs.expires_within_hours(existing, hours=renew_window_h)
 
@@ -111,7 +100,7 @@ class SyncOrchestrator:
                     )
                     self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(
                         dsm_cert_name,
-                        hostnames=all_hosts,
+                        hostnames=hostnames,
                     )
                     return
 
@@ -119,7 +108,6 @@ class SyncOrchestrator:
                     f"[TLS] '{dsm_cert_name}' exists but expiring soon (<= {renew_window_h}h); renewing"
                 )
 
-            # Missing cert OR expiring soon => issue + import/replace + assign
             tmp_dir = Path("/tmp")
             cert_path = tmp_dir / f"{svc.name}.crt"
             key_path = tmp_dir / f"{svc.name}.key"
@@ -133,12 +121,13 @@ class SyncOrchestrator:
 
             self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(
                 dsm_cert_name,
-                hostnames=all_hosts,
+                hostnames=hostnames,
             )
 
 
 def parse_dest_url(url: str) -> Tuple[Protocol, str, int]:
     p = urlparse(url)
+    # TODO: guard to ensure Protocol (Literal["http", "https"])
     protocol: Protocol = p.scheme or "http"
     host = p.hostname or "localhost"
 

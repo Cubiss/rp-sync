@@ -1,5 +1,3 @@
-# rp_sync/dns_updater.py
-
 from __future__ import annotations
 
 import re
@@ -68,7 +66,6 @@ def _split_host_port(server: str, default_port: int = 53) -> tuple[str, int]:
     if not value:
         raise ValueError("Empty DNS server value")
 
-    # IPv6 literal like "[2001:db8::1]:53"
     if value.startswith("["):
         end = value.find("]")
         if end == -1:
@@ -109,7 +106,6 @@ class DnsUpdater:
         if not zones:
             raise ValueError("No DNS zones configured")
 
-        # Build per-zone contexts (server + TSIG)
         for z in zones:
             if not z.tsig_key_file:
                 raise ValueError(f"TSIG key file is required for zone {z.zone}")
@@ -136,7 +132,7 @@ class DnsUpdater:
         info = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
         return info[0][4][0]
 
-    def _select_zone_for_hostname(self, hostname: str) -> _ZoneContext:
+    def _select_zone_for_hostname(self, hostname: str) -> _ZoneContext | None:
         """Pick the most specific configured zone that contains the hostname."""
         fqdn = dnsname.from_text(hostname)
 
