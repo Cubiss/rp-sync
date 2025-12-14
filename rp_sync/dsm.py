@@ -117,7 +117,6 @@ class DsmCertificateClient:
         Best-effort parse of expiry from various DSM builds.
         Returns an aware UTC datetime if possible, else None.
         """
-        self.logger.debug(cert)
 
         for key in (
             "valid_till",
@@ -449,7 +448,7 @@ class DsmReverseProxyClient:
             "method": method,
             **params,
         }
-        self.logger.debug(f"[DSM] Calling {method} with params: {params}")
+        self.logger.debug(f"[DSM] Calling {self.PATH}/{method} with params: {params}")
         resp = self.session.post(self.PATH, data)
         self.logger.debug(f"[DSM] Response: {json.dumps(resp)}")
         return resp
