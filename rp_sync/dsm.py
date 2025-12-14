@@ -112,12 +112,14 @@ class DsmCertificateClient:
 
     # --- helpers for "don't renew unless needed" ---
 
-    @staticmethod
-    def _parse_expiry_dt(cert: Dict[str, Any]) -> Optional[datetime]:
+    def _parse_expiry_dt(self, cert: Dict[str, Any]) -> Optional[datetime]:
         """
         Best-effort parse of expiry from various DSM builds.
         Returns an aware UTC datetime if possible, else None.
         """
+
+        self.logger.debug(cert)
+
         for key in (
             "valid_till",
             "valid_to",
@@ -166,7 +168,7 @@ class DsmCertificateClient:
 
         dt = self._parse_expiry_dt(cert)
         if dt is None:
-            # Can't safely prove it's not expiring; treat as "needs attention"
+            self.logger.warning(f"No expiry date for cert {cert}")
             return True
 
         now = datetime.now(timezone.utc)
