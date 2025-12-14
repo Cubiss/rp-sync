@@ -126,7 +126,8 @@ class Watcher:
             directory = os.path.dirname(path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
-        except Exception:
+        except Exception as ex:
+            self.logger.debug(ex)
             return
 
         try:
@@ -137,8 +138,8 @@ class Watcher:
                     f.write("unhealthy\n")
                     if error_text:
                         f.write(error_text.strip()[:1000] + "\n")
-        except Exception:
-            # Don't crash just because health file is unhappy
+        except Exception as ex:
+            self.logger.debug(ex)
             pass
 
     def _get_services_mtime(self, services_path: str) -> Optional[float]:
