@@ -87,6 +87,7 @@ def load_services(path: Optional[str] = None) -> List[ServiceConfig]:
             source_protocol=s["source_protocol"],
             dns_a=s.get("dns_a"),
             aliases=s.get("aliases", []),
+            allow_http=bool(s.get("allow_http", False)),
         )
         result.append(svc)
 

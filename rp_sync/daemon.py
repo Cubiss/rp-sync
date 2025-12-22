@@ -18,22 +18,23 @@ from .logging_utils import Logger
 from .models import RootConfig
 from .step_ca import StepCAClient
 from .dsm import DsmSession, DsmCertificateClient, _read_secret, DsmReverseProxyClient
-from .orchestrator import SyncContext, SyncOrchestrator
-from .service import (
-    get_services_path,
-    load_services,
-    SERVICE_FILE_SUFFIX,
-)
+from .orchestrator import SyncContext
+from .http_redirect_server import start_redirect_server, RedirectServer
+from .service import get_services_path, load_services, SERVICE_FILE_SUFFIX
+from .orchestrator import SyncOrchestrator
 
 
-class Watcher:
-    """Watch only service configuration and trigger syncs.
+class Daemon:
+    """Long-running rp-sync process.
 
-    The "root" config (DSM/DNS/certs) is loaded once up-front and is not
-    reloaded on changes. If you change those, restart the process/container.
+    In this mode, rp-sync:
+      - performs an initial sync
+      - keeps running
+      - polls service configuration and re-syncs on changes
+      - (optionally) hosts a tiny HTTP->HTTPS redirect backend
 
-    All external connectors are mandatory constructor parameters. Use
-    `Watcher.from_env(logger)` as the default entrypoint.
+    The "root" config (DSM/DNS/certs) is loaded once at startup and is not
+    reloaded on changes.
     """
 
     def __init__(
@@ -45,6 +46,7 @@ class Watcher:
         step_ca: StepCAClient,
         dsm_certs: DsmCertificateClient,
         dsm_rp: DsmReverseProxyClient,
+        daemon_mode: bool,
     ) -> None:
         self.logger = logger
 
@@ -61,7 +63,20 @@ class Watcher:
         )
 
         self._stop_event = threading.Event()
+        self._redirect_server: RedirectServer | None = None
         self._register_signal_handlers()
+
+        # Optionally start builtin HTTP->HTTPS redirect backend.
+        hr = getattr(core_config, "http_redirect", None)
+        if hr and hr.enabled and hr.builtin_backend.enabled:
+            if not daemon_mode:
+                raise RuntimeError(
+                    "http_redirect.builtin_backend is enabled, but rp-sync is not running in daemon mode. "
+                    "The builtin redirect backend must stay running to handle redirects. "
+                    "Run `rp-sync daemon`, or disable builtin_backend and point backend_url to an external "
+                    "redirect service."
+                )
+            self._redirect_server = start_redirect_server(logger, hr)
 
     # ----- static construction helpers ---------------------------------- #
 
@@ -84,12 +99,10 @@ class Watcher:
         return dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp
 
     @staticmethod
-    def from_core_config(logger: Logger, core_config: RootConfig) -> "Watcher":
-        """Build a Watcher from an already loaded root config."""
-        dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp = Watcher._init_connectors(
-            logger, core_config
-        )
-        return Watcher(
+    def from_core_config(logger: Logger, core_config: RootConfig, daemon_mode: bool) -> "Daemon":
+        """Build a Daemon from an already loaded root config."""
+        dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp = Daemon._init_connectors(logger, core_config)
+        return Daemon(
             logger=logger,
             core_config=core_config,
             dsm_session=dsm_session,
@@ -97,12 +110,13 @@ class Watcher:
             step_ca=step_ca,
             dsm_certs=dsm_certs,
             dsm_rp=dsm_rp,
+            daemon_mode=daemon_mode,
         )
 
     @staticmethod
-    def from_env(logger: Logger) -> "Watcher":
+    def from_env(logger: Logger, daemon_mode: bool) -> "Daemon":
         core_cfg = load_root_config()
-        return Watcher.from_core_config(logger, core_cfg)
+        return Daemon.from_core_config(logger, core_cfg, daemon_mode=daemon_mode)
 
     # ----- internals ----------------------------------------------------- #
 
@@ -110,11 +124,16 @@ class Watcher:
         signal.signal(signal.SIGTERM, self._handle_stop)
         signal.signal(signal.SIGINT, self._handle_stop)
         self.logger.debug(
-            "[watcher] Registered signal handlers for SIGTERM and SIGINT " "(Docker stop and Ctrl+C)"
+            "[daemon] Registered signal handlers for SIGTERM and SIGINT (Docker stop and Ctrl+C)"
         )
 
     def _handle_stop(self, signum, frame) -> None:  # type: ignore[override]
         self._stop_event.set()
+        if self._redirect_server is not None:
+            try:
+                self._redirect_server.stop(self.logger)
+            except Exception as ex:
+                self.logger.debug(ex)
 
     def _get_health_path(self) -> str:
         return os.environ.get(HEALTH_ENV, DEFAULT_HEALTH_PATH)
@@ -144,12 +163,7 @@ class Watcher:
             pass
 
     def _get_services_mtime(self, services_path: str) -> Optional[float]:
-        """Return a composite mtime representing all service config.
-
-        - If *services_path* is a file, return its mtime.
-        - If it's a directory, return max(mtime(directory), mtimes of all
-          *.service files inside).
-        """
+        """Return a composite mtime representing all service config."""
         if os.path.isdir(services_path):
             try:
                 mtimes = [os.path.getmtime(services_path)]
@@ -168,19 +182,16 @@ class Watcher:
 
     # ----- public API ---------------------------------------------------- #
 
-    def watch(self) -> None:
-        """Watch only the service configuration and run syncs on change.
-
-        Root config is NOT watched. Changing DSM/DNS/certs => restart.
-        """
+    def run(self) -> None:
+        """Run forever: poll services config and sync on change."""
         services_path = get_services_path()
         poll_seconds = float(os.environ.get(POLL_ENV, str(DEFAULT_POLL_SECONDS)))
 
         last_services_mtime: Optional[float] = None
 
-        self.logger.info(f"[watcher] Services path:  {services_path}")
-        self.logger.info(f"[watcher] Health file:    {self._get_health_path()}")
-        self.logger.info(f"[watcher] Poll interval:  {poll_seconds}s")
+        self.logger.info(f"[daemon] Services path:  {services_path}")
+        self.logger.info(f"[daemon] Health file:    {self._get_health_path()}")
+        self.logger.info(f"[daemon] Poll interval:  {poll_seconds}s")
 
         # Run at least once, even if the files already exist
         force_first_run = True
@@ -190,22 +201,22 @@ class Watcher:
 
             if mtime is None:
                 msg = f"Service config not found: {services_path}"
-                self.logger.info(f"[watcher] {msg}")
+                self.logger.info(f"[daemon] {msg}")
                 self._write_health(False, msg)
             else:
                 if force_first_run or last_services_mtime is None or mtime != last_services_mtime:
                     force_first_run = False
                     last_services_mtime = mtime
-                    self.logger.info("[watcher] Detected services change, running sync...")
+                    self.logger.info("[daemon] Detected services change, running sync...")
                     try:
-                        ok, failed_services = self.run_sync()
+                        ok, failed_services = self.sync_once()
                     except Exception:
                         tb = traceback.format_exc()
-                        self.logger.error("[watcher] Sync failed:\n" + tb)
+                        self.logger.error("[daemon] Sync failed:\n" + tb)
                         self._write_health(False, tb)
                     else:
                         if ok:
-                            self.logger.info("[watcher] Sync succeeded")
+                            self.logger.info("[daemon] Sync succeeded")
                             self._write_health(True)
                         else:
                             if failed_services:
@@ -214,22 +225,18 @@ class Watcher:
                             else:
                                 msg = "Sync completed with errors (some services failed)"
 
-                            self.logger.warning("[watcher] " + msg)
+                            self.logger.warning("[daemon] " + msg)
                             self._write_health(False, msg)
 
             self._stop_event.wait(poll_seconds)
 
-        self.logger.info("[watcher] Stop signal received – shutting down gracefully")
+        self.logger.info("[daemon] Stop signal received – shutting down gracefully")
 
-    def run_sync(self) -> Tuple[bool, List[str]]:
-        """Perform a single sync run using the current services view.
+        if self._redirect_server:
+            self._redirect_server.stop(self.logger)
 
-        - Reloads all services from the service path.
-        - Reuses the already initialized connectors.
-
-        Returns:
-            (ok, failed_services)
-        """
+    def sync_once(self) -> Tuple[bool, List[str]]:
+        """Perform a single sync run using the current services view."""
         self.ctx.services = load_services()
 
         self.logger.info("Starting sync run")

@@ -12,7 +12,7 @@ ENV RP_SYNC_LOG_DIR=/logs/ \
     RP_SYNC_CONFIG_PATH=/config/config.yaml \
     RP_SYNC_SERVICES_PATH=/services/ \
     RP_SYNC_HEALTH_FILE=/tmp/rp-sync-health \
-    RP_SYNC_WATCH_INTERVAL_SEC=5.0
+    RP_SYNC_POLL_SECONDS=5.0
 
 # Install step-cli and minimal tooling
 RUN apt-get update && \
@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir .
 VOLUME ["/config", "/secrets", "/certs", "/logs"]
 
 # Run the installed module's CLI
-CMD ["rp-sync", "--watch"]
+CMD ["rp-sync", "daemon"]
 
 
 # Container is "healthy" only if the health file exists and the first line is exactly "healthy"

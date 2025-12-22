@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, cast
 
 import yaml
 
-from .models import RootConfig, DsmConfig, DnsZone, CertsConfig
+from .models import (
+    RootConfig,
+    DsmConfig,
+    DnsZone,
+    CertsConfig,
+    HttpRedirectConfig,
+    BuiltinRedirectBackendConfig,
+    HttpRedirectMode,
+)
 
 APP_NAME = "rp-sync"
 
@@ -24,7 +32,7 @@ DEFAULT_CONFIG_PATH = "./config.yaml"
 HEALTH_ENV = "RP_SYNC_HEALTH_FILE"
 DEFAULT_HEALTH_PATH = "/tmp/rp-sync-health"
 
-POLL_ENV = "RP_SYNC_WATCH_INTERVAL_SEC"
+POLL_ENV = "RP_SYNC_POLL_SECONDS"
 DEFAULT_POLL_SECONDS = 5.0
 
 
@@ -47,6 +55,7 @@ def load_root_config(path: str | None = None) -> RootConfig:
     dsm_raw = raw["dsm"]
     dns_raw = raw["dns"]
     certs_raw = raw.get("certs", {})
+    http_redirect_raw = raw.get("http_redirect", {})
 
     dsm = DsmConfig(
         host=dsm_raw["host"],
@@ -80,7 +89,31 @@ def load_root_config(path: str | None = None) -> RootConfig:
         root_ca=certs_raw.get("root_ca"),
     )
 
-    return RootConfig(dsm=dsm, dns=dns_zones, certs=certs)
+    builtin_raw = http_redirect_raw.get("builtin_backend", {}) or {}
+    builtin_backend = BuiltinRedirectBackendConfig(
+        enabled=bool(builtin_raw.get("enabled", True)),
+        listen_host=str(builtin_raw.get("listen_host", "127.0.0.1")),
+        listen_port=int(builtin_raw.get("listen_port", 18080)),
+        code=int(builtin_raw.get("code", 308)),
+    )
+
+    mode_raw = http_redirect_raw.get("mode", "catch_all")
+    if mode_raw not in ("catch_all", "per_host"):
+        raise ValueError(
+            f"http_redirect.mode must be 'catch_all' or 'per_host' (got: {mode_raw!r})"
+        )
+    mode: HttpRedirectMode = cast(HttpRedirectMode, mode_raw)
+
+    http_redirect = HttpRedirectConfig(
+        enabled=bool(http_redirect_raw.get("enabled", False)),
+        mode=mode,
+        source_port=int(http_redirect_raw.get("source_port", 80)),
+        backend_url=str(http_redirect_raw.get("backend_url", "http://127.0.0.1:18080")),
+        canonical_host=http_redirect_raw.get("canonical_host"),
+        builtin_backend=builtin_backend,
+    )
+
+    return RootConfig(dsm=dsm, dns=dns_zones, certs=certs, http_redirect=http_redirect)
 
 
 def load_config(path: str | None = None) -> RootConfig:
@@ -93,4 +126,4 @@ def load_config(path: str | None = None) -> RootConfig:
     """
     core = load_root_config(path=path)
 
-    return RootConfig(dsm=core.dsm, dns=core.dns, certs=core.certs)
+    return RootConfig(dsm=core.dsm, dns=core.dns, certs=core.certs, http_redirect=core.http_redirect)
