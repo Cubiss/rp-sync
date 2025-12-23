@@ -76,7 +76,7 @@ class SyncOrchestrator:
         if hr.mode == "catch_all":
             rp_rule = ReverseProxyRule(
                 description="rp-sync http->https redirect (catch-all)",
-                src_host="",
+                src_host="*",
                 src_port=int(hr.source_port),
                 src_protocol="http",
                 dst_host=host,
