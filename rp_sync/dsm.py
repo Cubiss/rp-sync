@@ -112,14 +112,8 @@ class DsmCertificateClient:
         self.dsm = dsm
         self.logger = logger
 
-    # TODO: This seems unnecessarily complicated/broad - Gather debug information for my test setup (latest DSM)
     def _parse_expiry_dt(self, cert: Dict[str, Any]) -> Optional[datetime]:
-        """
-        Best-effort parse of expiry from various DSM builds.
-        Returns an aware UTC datetime if possible, else None.
-        """
-
-        for key in (
+        keys = (
             "valid_till",
             "valid_to",
             "valid_until",
@@ -127,10 +121,12 @@ class DsmCertificateClient:
             "notAfter",
             "expire_time",
             "expiry",
-        ):
-            if key not in cert:
-                continue
+        )
+        desc = (
+            cert.get("desc") or cert.get("display_name") or cert.get("name") or cert.get("id") or "unknown"
+        )
 
+        for key in keys:
             v = cert.get(key)
             if v is None:
                 continue
@@ -138,44 +134,41 @@ class DsmCertificateClient:
             if isinstance(v, (int, float)):
                 return _to_utc_datetime_from_unix_timestamp(float(v))
 
-            if not isinstance(v, str):
-                continue
+            if isinstance(v, str):
+                s = v.strip()
+                if not s:
+                    continue
 
-            s = v.strip()
-            if not s:
-                continue
+                if re.fullmatch(r"\d+", s):
+                    return _to_utc_datetime_from_unix_timestamp(float(s))
 
-            if re.fullmatch(r"\d+", s):
-                return _to_utc_datetime_from_unix_timestamp(float(s))
+                s_iso = s.replace("Z", "+00:00")
+                if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s_iso):
+                    s_iso = s_iso.replace(" ", "T", 1)
 
-            s_iso = s.replace("Z", "+00:00")
-
-            if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", s_iso):
-                s_iso = s_iso.replace(" ", "T", 1)
-
-            try:
-                dt = datetime.fromisoformat(s_iso)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt.astimezone(timezone.utc)
-            except Exception:
-                pass
-
-            m = re.match(
-                r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+"
-                r"(?P<hms>\d{2}:\d{2}:\d{2})\s+(?P<year>\d{4})"
-                r"(?:\s+(?P<tz>[A-Za-z]{3,4}))?$",
-                s,
-            )
-            if m:
-                tz = (m.group("tz") or "").upper()
-                base = f"{m.group('mon')} {m.group('day')} {m.group('hms')} {m.group('year')}"
                 try:
-                    dt = datetime.strptime(base, "%b %d %H:%M:%S %Y")
-                    if tz in ("GMT", "UTC", ""):
-                        return dt.replace(tzinfo=timezone.utc)
+                    dt = datetime.fromisoformat(s_iso)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.astimezone(timezone.utc)
                 except Exception:
                     pass
+
+                m = re.match(
+                    r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+(?P<hms>\d{2}:\d{2}:\d{2})\s+(?P<year>\d{4})(?:\s+(?P<tz>[A-Za-z]{3,4}))?$",
+                    s,
+                )
+                if m:
+                    tz = (m.group("tz") or "").upper()
+                    base = f"{m.group('mon')} {m.group('day')} {m.group('hms')} {m.group('year')}"
+                    try:
+                        dt = datetime.strptime(base, "%b %d %H:%M:%S %Y")
+                        if tz in ("GMT", "UTC", ""):
+                            return dt.replace(tzinfo=timezone.utc)
+                    except Exception:
+                        pass
+
+                self.logger.debug(f"[DSM] Failed to parse cert expiry for {desc}: {key}={s!r}")
 
         return None
 
@@ -410,8 +403,12 @@ class DsmReverseProxyClient:
 
     @staticmethod
     def _scheme_to_proto(s: str) -> int:
-        # TODO: refactor, 0 should be explicitly for http. Add support for any other desirable schemes and fail for unsupported
-        return 1 if s.lower() == "https" else 0
+        v = s.lower()
+        if v == "http":
+            return 0
+        if v == "https":
+            return 1
+        raise ValueError(f"Unsupported protocol: {s!r}")
 
     def _call(self, method: str, **params) -> dict:
         data = {
@@ -425,7 +422,6 @@ class DsmReverseProxyClient:
         self.logger.debug(f"[DSM] Response: {json.dumps(resp)}")
         return resp
 
-    # TODO: debug log should contain requests/responses."Shape is roughly" is a bit pointless.
     def list_rules(self) -> list[dict]:
         """
         Return raw rule objects as DSM sends them.
@@ -454,7 +450,6 @@ class DsmReverseProxyClient:
         data = resp.get("data") or resp
         return data.get("entries") or data.get("items") or data.get("rules") or []
 
-    # TODO: debug log should contain requests/responses.
     def upsert_rule(self, rule: ReverseProxyRule) -> None:
         """
         Create or update a reverse-proxy rule for one hostname.
@@ -504,11 +499,13 @@ class DsmReverseProxyClient:
         if existing is None:
             payload = {"entry": json.dumps(entry)}
             resp = self._call("create", **payload)
+            action = "Created"
         else:
             entry["UUID"] = existing.get("UUID") or existing.get("_key")
             payload = {"entry": json.dumps(entry)}
             resp = self._call("update", **payload)
+            action = "Updated"
 
         if not resp.get("success"):
             raise RuntimeError(f"DSM ReverseProxy/set failed: {resp}")
-        self.logger.info(f"[DSM] Updated reverse-proxy rule for {rule.src_host}:{rule.src_port}")
+        self.logger.info(f"[DSM] {action} reverse-proxy rule for {rule.src_host}:{rule.src_port}")

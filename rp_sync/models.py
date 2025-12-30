@@ -40,6 +40,14 @@ class CertsConfig:
 
 
 @dataclass
+class RedirectConfig:
+    enabled: bool = True
+    bind_host: str = "127.0.0.1"
+    backend_host: Optional[str] = None
+    port: int = 9179
+
+
+@dataclass
 class ServiceConfig:
     name: str
     host: str
@@ -48,6 +56,7 @@ class ServiceConfig:
     source_protocol: Protocol
     dns_a: Optional[str] = None
     aliases: List[str] = field(default_factory=list)
+    loaded_from: Optional[str] = None
 
 
 @dataclass
@@ -55,6 +64,7 @@ class RootConfig:
     dsm: DsmConfig
     dns: list[DnsZone]
     certs: CertsConfig
+    redirect: RedirectConfig = field(default_factory=RedirectConfig)
 
 
 @dataclass

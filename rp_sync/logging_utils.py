@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-
 import os
 import sys
 import threading
-import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -22,14 +20,14 @@ from rp_sync.config import (
 
 
 class Logger:
-    _instances: Dict[str, Logger] = {}
+    _instances: Dict[str, "Logger"] = {}
 
     def __init__(
         self,
         app_name: str = APP_NAME,
         log_level: str = "INFO",
         keep: int = 10,
-        log_dir: Optional[Path|str] = "./logs",
+        log_dir: Optional[Path | str] = "./logs",
     ):
         self.app_name = app_name
         self.keep = keep
@@ -40,9 +38,10 @@ class Logger:
         pid = os.getpid()
         self.file_path = self.log_dir / f"{self.app_name}_{ts}_{pid}.log"
         self.latest_path = self.log_dir / "latest.log"
+        self.latest_debug_path = self.log_dir / "latest.debug.log"
 
         self.logger = logging.getLogger(self.app_name)
-        self.logger.setLevel(log_level or logging.INFO)
+        self.logger.setLevel(getattr(logging, str(log_level).upper(), logging.INFO))
         self.logger.propagate = False
 
         self._base_fmt = logging.Formatter(
@@ -54,11 +53,10 @@ class Logger:
             self._add_file_handlers()
 
         self._prune_old_logs()
-
         self.logger.debug(f"Logging initialized -> {self.file_path}")
 
     @classmethod
-    def from_env(cls) -> Logger:
+    def from_env(cls) -> "Logger":
         key = f"{APP_NAME}"
         if key in cls._instances:
             inst = cls._instances[key]
@@ -78,19 +76,22 @@ class Logger:
         lvl = getattr(logging, str(level).upper(), level)
         self.logger.setLevel(lvl)
         for h in self.logger.handlers:
-            h.setLevel(logging.DEBUG if isinstance(h, logging.FileHandler) else lvl)
+            if getattr(h, "_app_file_debug", False):
+                h.setLevel(logging.DEBUG)
+            else:
+                h.setLevel(lvl)
 
     def add_console(self, level: str | int = "INFO") -> None:
-        if not any(
+        if any(
             isinstance(h, logging.StreamHandler) and getattr(h, "_app_console", False)
             for h in self.logger.handlers
         ):
-            ch = logging.StreamHandler(stream=sys.stdout)
-            ch.setFormatter(self._base_fmt)
-            ch.setLevel(getattr(logging, str(level).upper(), level))
-            ch._app_console = True
-            self.logger.addHandler(ch)
-
+            return
+        ch = logging.StreamHandler(stream=sys.stdout)
+        ch.setFormatter(self._base_fmt)
+        ch.setLevel(getattr(logging, str(level).upper(), level))
+        ch._app_console = True
+        self.logger.addHandler(ch)
 
     def _has_app_file_handlers(self) -> bool:
         return any(
@@ -99,23 +100,28 @@ class Logger:
         )
 
     def _add_file_handlers(self) -> None:
-        """
-        Two file handlers:
-          • append to the per-run file
-          • overwrite 'latest.log'
-        """
-        for path, mode in [(self.file_path, "a"), (self.latest_path, "w")]:
-            fh = logging.FileHandler(path, encoding="utf-8", mode=mode)
-            fh.setFormatter(self._base_fmt)
-            # TODO: Let's introduce latest.debug.log that will always capture DEBUG, make current/latest follow the configured log level
-            fh.setLevel(logging.DEBUG)
-            fh._app_file = True
-            self.logger.addHandler(fh)
+        lvl = self.logger.level
+
+        run_fh = logging.FileHandler(self.file_path, encoding="utf-8", mode="a")
+        run_fh.setFormatter(self._base_fmt)
+        run_fh.setLevel(lvl)
+        run_fh._app_file = True
+        self.logger.addHandler(run_fh)
+
+        latest_fh = logging.FileHandler(self.latest_path, encoding="utf-8", mode="w")
+        latest_fh.setFormatter(self._base_fmt)
+        latest_fh.setLevel(lvl)
+        latest_fh._app_file = True
+        self.logger.addHandler(latest_fh)
+
+        debug_fh = logging.FileHandler(self.latest_debug_path, encoding="utf-8", mode="w")
+        debug_fh.setFormatter(self._base_fmt)
+        debug_fh.setLevel(logging.DEBUG)
+        debug_fh._app_file = True
+        debug_fh._app_file_debug = True
+        self.logger.addHandler(debug_fh)
 
     def _prune_old_logs(self) -> None:
-        """
-        Keep the newest `keep` matching '{APP_NAME}_*.log' in the same directory.
-        """
         if self.keep <= 0:
             return
         pattern = f"{self.app_name}_*.log"
@@ -147,27 +153,11 @@ class Logger:
     def log(self, level, msg, *args, **kwargs):
         self.logger.log(level, msg, *args, **kwargs)
 
-    def install_exception_logging(self: Logger) -> None:
+    def install_exception_logging(self) -> None:
         def _log(exc_type, exc, tb, where: str = "") -> None:
-            # TODO: any other common "non-error" exceptions I might want to ignore?
-            if exc_type in (KeyboardInterrupt, SystemExit):
+            if exc_type in (KeyboardInterrupt, SystemExit, BrokenPipeError):
                 return
-
-            log_exception = getattr(self, "exception", None)
-            if callable(log_exception):
-                log_exception(
-                    f"Unhandled exception{where}",
-                    exc_info=(exc_type, exc, tb),
-                )
-            else:
-                formatted = "".join(traceback.format_exception(exc_type, exc, tb))
-
-                # TODO: any reason to guard this given this class implements error?
-                log_error = getattr(self, "error", None)
-                if callable(log_error):
-                    log_error(f"Unhandled exception{where}\n{formatted}")
-                else:
-                    sys.stderr.write(f"Unhandled exception{where}\n{formatted}\n")
+            self.exception(f"Unhandled exception{where}", exc_info=(exc_type, exc, tb))
 
         def _sys_excepthook(exc_type, exc, tb) -> None:
             _log(exc_type, exc, tb)
@@ -175,17 +165,13 @@ class Logger:
 
         sys.excepthook = _sys_excepthook
 
-        if hasattr(threading, "excepthook"):
-            # TODO: Any reason to guard this given requires-python = ">=3.11"?
-            default_thread_excepthook = getattr(threading, "__excepthook__", None)
-            def _thread_excepthook(args) -> None:
-                _log(
-                    args.exc_type,
-                    args.exc_value,
-                    args.exc_traceback,
-                    where=f" in thread {args.thread.name!r}",
-                )
-                if callable(default_thread_excepthook):
-                    default_thread_excepthook(args)
+        default_thread_excepthook = getattr(threading, "__excepthook__", None)
 
-            threading.excepthook = _thread_excepthook
+        def _thread_excepthook(args) -> None:
+            _log(
+                args.exc_type, args.exc_value, args.exc_traceback, where=f" in thread {args.thread.name!r}"
+            )
+            if callable(default_thread_excepthook):
+                default_thread_excepthook(args)
+
+        threading.excepthook = _thread_excepthook

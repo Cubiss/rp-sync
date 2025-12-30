@@ -11,6 +11,7 @@ from .models import RootConfig, ServiceConfig, ReverseProxyRule, Protocol
 from .dns_updater import DnsUpdater
 from .step_ca import StepCAClient
 from .dsm import DsmSession, DsmCertificateClient, DsmReverseProxyClient
+from .redirect_backend import RedirectBackend
 
 
 @dataclass
@@ -22,6 +23,7 @@ class SyncContext:
     dsm_certs: DsmCertificateClient
     dsm_rp: DsmReverseProxyClient
     services: List[ServiceConfig]
+    redirect_backend: RedirectBackend
 
 
 class SyncOrchestrator:
@@ -48,33 +50,67 @@ class SyncOrchestrator:
         return errors
 
     def _sync_service(self, svc: ServiceConfig) -> None:
-        # TODO: Improve behavior of aliases. I already have a simple http->https redirect service, use it to redirect aliases to main hostname (instead of duplicate reverse proxy rules)
-        hostnames: List[str] = [svc.host, *svc.aliases]
+        canonical = svc.host
+        aliases = list(svc.aliases)
+        all_hosts: List[str] = [canonical, *aliases]
 
         self.logger.info(f"\n=== Service: {svc.name} ===")
-        self.logger.info(f"Hosts: {', '.join(hostnames)}")
+        if svc.loaded_from:
+            self.logger.info(f"Config: {svc.loaded_from}")
+        self.logger.info(f"Hosts: {', '.join(all_hosts)}")
         self.logger.info(f"Backend: {svc.dest_url}")
 
         if svc.dns_a:
-            for hostname in hostnames:
+            for hostname in all_hosts:
                 self.ctx.dns_updater.ensure_a_record(hostname, svc.dns_a)
 
-        protocol, host, port = parse_dest_url(svc.dest_url)
-        for hostname in hostnames:
-            rp_rule = ReverseProxyRule(
-                description=f"{svc.name} ({hostname})",
-                src_host=hostname,
+        dst_protocol, dst_host, dst_port = parse_dest_url(svc.dest_url)
+
+        self.ctx.dsm_rp.upsert_rule(
+            ReverseProxyRule(
+                description=f"{svc.name} ({canonical})",
+                src_host=canonical,
                 src_port=svc.source_port,
                 src_protocol=svc.source_protocol,
-                dst_host=host,
-                dst_port=port,
-                dst_protocol=protocol,
+                dst_host=dst_host,
+                dst_port=dst_port,
+                dst_protocol=dst_protocol,
             )
-            self.ctx.dsm_rp.upsert_rule(rp_rule)
+        )
+
+        if self.ctx.redirect_backend.enabled:
+            rb_host, rb_port, rb_proto = self.ctx.redirect_backend.destination()
+            if aliases:
+                for a in aliases:
+                    self.ctx.dsm_rp.upsert_rule(
+                        ReverseProxyRule(
+                            description=f"{svc.name} (redirect {a} -> {canonical})",
+                            src_host=a,
+                            src_port=svc.source_port,
+                            src_protocol=svc.source_protocol,
+                            dst_host=rb_host,
+                            dst_port=rb_port,
+                            dst_protocol=rb_proto,
+                        )
+                    )
+
+            if svc.source_protocol == "https":
+                for h in all_hosts:
+                    self.ctx.dsm_rp.upsert_rule(
+                        ReverseProxyRule(
+                            description=f"{svc.name} (redirect http -> https {h})",
+                            src_host=h,
+                            src_port=80,
+                            src_protocol="http",
+                            dst_host=rb_host,
+                            dst_port=rb_port,
+                            dst_protocol=rb_proto,
+                        )
+                    )
 
         if self.ctx.step_ca.enabled and svc.source_protocol == "https":
             cn = svc.host
-            sans = hostnames
+            sans = all_hosts
             dsm_cert_name = f"rp-sync-{svc.name}"
 
             existing = self.ctx.dsm_certs.find_certificate_by_name(dsm_cert_name)
@@ -82,26 +118,21 @@ class SyncOrchestrator:
 
             if existing:
                 assigned = self.ctx.dsm_certs.is_assigned_to_reverse_proxy_hosts(
-                    dsm_cert_name, hostnames=hostnames
+                    dsm_cert_name, hostnames=all_hosts
                 )
                 expiring = self.ctx.dsm_certs.expires_within_hours(existing, hours=renew_window_h)
 
                 if (not expiring) and assigned:
                     self.logger.info(
-                        f"[TLS] '{dsm_cert_name}' already valid and assigned to all hosts; "
-                        f"skipping issuance/import"
+                        f"[TLS] '{dsm_cert_name}' already valid and assigned to all hosts; skipping issuance/import"
                     )
                     return
 
                 if (not expiring) and (not assigned):
                     self.logger.info(
-                        f"[TLS] '{dsm_cert_name}' valid but not assigned everywhere; "
-                        f"assigning only (no re-issue)"
+                        f"[TLS] '{dsm_cert_name}' valid but not assigned everywhere; assigning only (no re-issue)"
                     )
-                    self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(
-                        dsm_cert_name,
-                        hostnames=hostnames,
-                    )
+                    self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(dsm_cert_name, hostnames=all_hosts)
                     return
 
                 self.logger.info(
@@ -118,17 +149,15 @@ class SyncOrchestrator:
             key_pem = key_path.read_text(encoding="utf-8")
 
             self.ctx.dsm_certs.import_or_replace_certificate(dsm_cert_name, cert_pem, key_pem)
-
-            self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(
-                dsm_cert_name,
-                hostnames=hostnames,
-            )
+            self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(dsm_cert_name, hostnames=all_hosts)
 
 
 def parse_dest_url(url: str) -> Tuple[Protocol, str, int]:
     p = urlparse(url)
-    # TODO: guard to ensure Protocol (Literal["http", "https"])
-    protocol: Protocol = p.scheme or "http"
+    scheme = (p.scheme or "http").lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"Unsupported dest_url scheme: {scheme!r} in {url!r}")
+    protocol: Protocol = scheme
     host = p.hostname or "localhost"
 
     if p.port is not None:

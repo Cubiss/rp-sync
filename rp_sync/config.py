@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 import yaml
 
-from .models import RootConfig, DsmConfig, DnsZone, CertsConfig
+from .models import RootConfig, DsmConfig, DnsZone, CertsConfig, RedirectConfig
 
 APP_NAME = "rp-sync"
 
@@ -47,6 +47,7 @@ def load_root_config(path: str | None = None) -> RootConfig:
     dsm_raw = raw["dsm"]
     dns_raw = raw["dns"]
     certs_raw = raw.get("certs", {})
+    redirect_raw = raw.get("redirect", {})
 
     dsm = DsmConfig(
         host=dsm_raw["host"],
@@ -80,7 +81,29 @@ def load_root_config(path: str | None = None) -> RootConfig:
         root_ca=certs_raw.get("root_ca"),
     )
 
-    return RootConfig(dsm=dsm, dns=dns_zones, certs=certs)
+    if redirect_raw is None:
+        redirect_raw = {}
+    if not isinstance(redirect_raw, dict):
+        raise ValueError("'redirect' must be a mapping")
+
+    enabled_raw = redirect_raw.get("enabled", True)
+    if isinstance(enabled_raw, str):
+        enabled = enabled_raw.strip().lower() not in ("0", "false", "no", "off")
+    else:
+        enabled = bool(enabled_raw)
+
+    redirect = RedirectConfig(
+        enabled=enabled,
+        bind_host=str(redirect_raw.get("bind_host", "127.0.0.1")),
+        backend_host=redirect_raw.get("backend_host"),
+        port=int(redirect_raw.get("port", 18080)),
+    )
+    if redirect.backend_host is not None:
+        redirect.backend_host = str(redirect.backend_host)
+    else:
+        redirect.backend_host = redirect.bind_host
+
+    return RootConfig(dsm=dsm, dns=dns_zones, certs=certs, redirect=redirect)
 
 
 def load_config(path: str | None = None) -> RootConfig:
@@ -93,4 +116,4 @@ def load_config(path: str | None = None) -> RootConfig:
     """
     core = load_root_config(path=path)
 
-    return RootConfig(dsm=core.dsm, dns=core.dns, certs=core.certs)
+    return RootConfig(dsm=core.dsm, dns=core.dns, certs=core.certs, redirect=core.redirect)
