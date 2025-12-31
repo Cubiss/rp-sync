@@ -22,11 +22,11 @@ def main() -> None:
     daemon_mode = command == "daemon"
 
     config = load_config()
-    proc = Daemon.from_core_config(logger, config, daemon_mode=daemon_mode)
+    proc = Daemon.from_core_config(logger, config)
 
     if daemon_mode:
         logger.info("Starting in daemon mode.")
-        proc.run()
+        proc.watch()
     else:
         logger.info("Starting single run.")
         proc.sync_once()

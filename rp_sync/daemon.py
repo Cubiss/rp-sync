@@ -24,7 +24,7 @@ from .service import get_services_path, load_services, SERVICE_FILE_SUFFIX
 from .redirect_backend import RedirectBackend
 
 
-class Watcher:
+class Daemon:
     """Watch service configuration and trigger syncs."""
 
     def __init__(
@@ -75,11 +75,11 @@ class Watcher:
         return dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp
 
     @staticmethod
-    def from_core_config(logger: Logger, core_config: RootConfig) -> "Watcher":
-        dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp = Watcher._init_connectors(
+    def from_core_config(logger: Logger, core_config: RootConfig) -> "Daemon":
+        dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp = Daemon._init_connectors(
             logger, core_config
         )
-        return Watcher(
+        return Daemon(
             logger=logger,
             core_config=core_config,
             dsm_session=dsm_session,
@@ -90,9 +90,9 @@ class Watcher:
         )
 
     @staticmethod
-    def from_env(logger: Logger) -> "Watcher":
+    def from_env(logger: Logger) -> "Daemon":
         core_cfg = load_root_config()
-        return Watcher.from_core_config(logger, core_cfg)
+        return Daemon.from_core_config(logger, core_cfg)
 
     def _register_signal_handlers(self) -> None:
         signal.signal(signal.SIGTERM, self._handle_stop)
@@ -185,7 +185,7 @@ class Watcher:
 
     def _execute_sync(self, services: Optional[List[ServiceConfig]], source: str) -> None:
         try:
-            failed_services = self.run_sync(services=services, source=source)
+            failed_services = self.sync_once(services=services, source=source)
         except Exception:
             tb = traceback.format_exc()
             self.logger.error("[watcher] Sync failed:\n" + tb)
@@ -237,7 +237,7 @@ class Watcher:
         self.logger.info("[watcher] Stop signal received – shutting down gracefully")
         self.redirect_backend.stop()
 
-    def _sync_once(self, services: Optional[List[ServiceConfig]], source: str) -> List[str]:
+    def sync_once(self, services: Optional[List[ServiceConfig]] = None, source: str = "full") -> List[str]:
         all_services = load_services()
         self.redirect_backend.update_from_services(all_services)
         self.ctx.services = all_services if services is None else services
@@ -252,6 +252,3 @@ class Watcher:
             self.logger.warning("Sync run completed with errors for services: " + services_str)
 
         return failed_services
-
-    def run_sync(self, services: Optional[List[ServiceConfig]] = None, source: str = "full") -> List[str]:
-        return self._sync_once(services=services, source=source)
