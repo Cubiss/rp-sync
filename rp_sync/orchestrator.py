@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 import traceback
 
@@ -31,8 +32,9 @@ class SyncOrchestrator:
         self.ctx = ctx
         self.logger = logger
 
-    def sync(self) -> List[str]:
+    def sync(self) -> Tuple[List[str], Optional[datetime]]:
         errors: List[str] = []
+        next_checks: List[datetime] = []
 
         # 0) Optional: global HTTP->HTTPS redirect rules
         try:
@@ -40,22 +42,26 @@ class SyncOrchestrator:
         except Exception:
             tb = traceback.format_exc()
             self.logger.error("\n[orchestrator] Failed to sync http_redirect:\n" + tb)
-            return False, ["__http_redirect__"]
+            return ["__http_redirect__"], None
 
         for svc in self.ctx.services:
             try:
-                self._sync_service(svc)
+                next_check = self._sync_service(svc)
+                if next_check is not None:
+                    next_checks.append(next_check)
             except Exception:
                 errors.append(svc.name)
                 tb = traceback.format_exc()
                 self.logger.error(f"\n[orchestrator] Failed to sync service '{svc.name}':\n{tb}")
 
+        earliest = min(next_checks) if next_checks else None
+
         if errors:
             self.logger.error("\nSome services failed to sync: " + ", ".join(sorted(errors)))
-            return errors
+            return errors, earliest
 
         self.logger.info("\nAll services processed successfully.")
-        return errors
+        return errors, earliest
 
     def _sync_http_redirect(self) -> None:
         hr = getattr(self.ctx.cfg, "http_redirect", None)
@@ -111,7 +117,7 @@ class SyncOrchestrator:
             f"Unknown http_redirect.mode '{hr.mode}'. Expected 'catch_all' or 'per_host'."
         )
 
-    def _sync_service(self, svc: ServiceConfig) -> None:
+    def _sync_service(self, svc: ServiceConfig) -> Optional[datetime]:
         canonical = svc.host
         aliases = list(svc.aliases)
         all_hosts: List[str] = [canonical, *aliases]
@@ -185,17 +191,21 @@ class SyncOrchestrator:
                 expiring = self.ctx.dsm_certs.expires_within_hours(existing, hours=renew_window_h)
 
                 if (not expiring) and assigned:
+                    expiry_dt = self.ctx.dsm_certs.parse_expiry_dt(existing)
+                    next_check = (expiry_dt - timedelta(hours=renew_window_h)) if expiry_dt else None
                     self.logger.info(
-                        f"[TLS] '{dsm_cert_name}' already valid and assigned to all hosts; skipping issuance/import"
+                        f"[TLS] '{dsm_cert_name}' already valid and assigned to all hosts; "
+                        f"next check scheduled at {next_check}"
                     )
-                    return
+                    return next_check
 
                 if (not expiring) and (not assigned):
                     self.logger.info(
                         f"[TLS] '{dsm_cert_name}' valid but not assigned everywhere; assigning only (no re-issue)"
                     )
                     self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(dsm_cert_name, hostnames=all_hosts)
-                    return
+                    expiry_dt = self.ctx.dsm_certs.parse_expiry_dt(existing)
+                    return (expiry_dt - timedelta(hours=renew_window_h)) if expiry_dt else None
 
                 self.logger.info(
                     f"[TLS] '{dsm_cert_name}' exists but expiring soon (<= {renew_window_h}h); renewing"
@@ -212,6 +222,8 @@ class SyncOrchestrator:
 
             self.ctx.dsm_certs.import_or_replace_certificate(dsm_cert_name, cert_pem, key_pem)
             self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(dsm_cert_name, hostnames=all_hosts)
+
+        return None
 
 
 def parse_dest_url(url: str) -> Tuple[Protocol, str, int]:

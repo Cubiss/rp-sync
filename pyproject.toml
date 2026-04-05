@@ -2,7 +2,6 @@
 name = "rp-sync"
 version = "0.1.0"
 description = "Sync Synology reverse proxy, DNS (RFC2136) and step-ca certs from a single config."
-readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "pyyaml>=6.0",

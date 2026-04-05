@@ -112,7 +112,7 @@ class DsmCertificateClient:
         self.dsm = dsm
         self.logger = logger
 
-    def _parse_expiry_dt(self, cert: Dict[str, Any]) -> Optional[datetime]:
+    def parse_expiry_dt(self, cert: Dict[str, Any]) -> Optional[datetime]:
         keys = (
             "valid_till",
             "valid_to",
@@ -176,7 +176,7 @@ class DsmCertificateClient:
         if cert.get("is_valid") is False:
             return True
 
-        dt = self._parse_expiry_dt(cert)
+        dt = self.parse_expiry_dt(cert)
         if dt is None:
             self.logger.warning(f"No expiry date for cert {cert}")
             return True

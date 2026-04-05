@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import signal
 import threading
+import time
 import traceback
+from datetime import datetime
 from types import FrameType
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 from .config import (
     load_root_config,
@@ -183,30 +185,32 @@ class Daemon:
         services = self._load_services_from_files(changed_files)
         return services, f"incremental ({len(changed_files)} file(s))"
 
-    def _execute_sync(self, services: Optional[List[ServiceConfig]], source: str) -> None:
+    def _execute_sync(self, services: Optional[List[ServiceConfig]], source: str) -> Optional[datetime]:
         try:
-            failed_services = self.sync_once(services=services, source=source)
+            failed_services, next_cert_check = self.sync_once(services=services, source=source)
         except Exception:
             tb = traceback.format_exc()
             self.logger.error("[watcher] Sync failed:\n" + tb)
             self._write_health(False, tb)
-            return
+            return None
 
         if not failed_services:
             self.logger.info("[watcher] Sync succeeded")
             self._write_health(True)
-            return
+            return next_cert_check
 
         services_str = ", ".join(sorted(failed_services))
         msg = "Sync completed with errors for services: " + services_str
         self.logger.warning("[watcher] " + msg)
         self._write_health(False, msg)
+        return next_cert_check
 
     def watch(self) -> None:
         services_path = get_services_path()
         poll_seconds = float(os.environ.get(POLL_ENV, str(DEFAULT_POLL_SECONDS)))
 
         last_state: Dict[str, float] = {}
+        next_cert_check_at: Optional[float] = None
 
         self.logger.info(f"[watcher] Services path:  {services_path}")
         self.logger.info(f"[watcher] Health file:    {self._get_health_path()}")
@@ -215,6 +219,16 @@ class Daemon:
         force_first_run = True
 
         while not self._stop_event.is_set():
+            if next_cert_check_at is not None and time.time() >= next_cert_check_at:
+                next_cert_check_at = None
+                self.logger.info("[watcher] Cert renewal window reached; running full sync")
+                nxt = self._execute_sync(None, "cert renewal check")
+                if nxt is not None:
+                    next_cert_check_at = nxt.timestamp()
+                    self.logger.info(f"[watcher] Next cert check scheduled at {nxt}")
+                self._stop_event.wait(poll_seconds)
+                continue
+
             state = self._get_service_file_state(services_path)
 
             if not state:
@@ -230,20 +244,25 @@ class Daemon:
                     last_state = state
 
                     run_services, source = self._plan_sync(changed_files, removed_files)
-                    self._execute_sync(run_services, source)
+                    nxt = self._execute_sync(run_services, source)
+                    if nxt is not None:
+                        next_cert_check_at = nxt.timestamp()
+                        self.logger.info(f"[watcher] Next cert check scheduled at {nxt}")
 
             self._stop_event.wait(poll_seconds)
 
         self.logger.info("[watcher] Stop signal received – shutting down gracefully")
         self.redirect_backend.stop()
 
-    def sync_once(self, services: Optional[List[ServiceConfig]] = None, source: str = "full") -> List[str]:
+    def sync_once(
+        self, services: Optional[List[ServiceConfig]] = None, source: str = "full"
+    ) -> Tuple[List[str], Optional[datetime]]:
         all_services = load_services()
         self.redirect_backend.update_from_services(all_services)
         self.ctx.services = all_services if services is None else services
 
         self.logger.info(f"Starting sync run [{source}] ({len(self.ctx.services)} service(s))")
-        failed_services = SyncOrchestrator(self.ctx, self.logger).sync()
+        failed_services, next_cert_check = SyncOrchestrator(self.ctx, self.logger).sync()
 
         if not failed_services:
             self.logger.info("Sync run completed successfully")
@@ -251,4 +270,4 @@ class Daemon:
             services_str = ", ".join(sorted(failed_services))
             self.logger.warning("Sync run completed with errors for services: " + services_str)
 
-        return failed_services
+        return failed_services, next_cert_check
