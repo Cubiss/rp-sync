@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Literal
+from typing import Dict, List, Optional, Literal
 
 Protocol = Literal["http", "https"]
 
@@ -56,6 +56,7 @@ class ServiceConfig:
     source_protocol: Protocol
     dns_a: Optional[str] = None
     aliases: List[str] = field(default_factory=list)
+    custom_headers: Dict[str, str] = field(default_factory=dict)
     loaded_from: Optional[str] = None
 
 
@@ -79,3 +80,4 @@ class ReverseProxyRule:
     dst_protocol: Protocol
 
     enabled: bool = True
+    custom_headers: Dict[str, str] = field(default_factory=dict)

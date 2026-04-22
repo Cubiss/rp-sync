@@ -487,7 +487,9 @@ class DsmReverseProxyClient:
                     "hsts": False,
                 },
             },
-            "customize_headers": [],
+            "customize_headers": [
+                {"name": k, "value": v} for k, v in rule.custom_headers.items()
+            ],
             "enable": bool(rule.enabled),
             "proxy_http_version": 1,
             "proxy_connect_timeout": 60,

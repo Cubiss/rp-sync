@@ -143,6 +143,7 @@ class SyncOrchestrator:
                 dst_host=dst_host,
                 dst_port=dst_port,
                 dst_protocol=dst_protocol,
+                custom_headers=svc.custom_headers,
             )
         )
 

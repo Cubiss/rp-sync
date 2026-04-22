@@ -60,6 +60,7 @@ def _service_from_dict(s: Dict[str, Any], loaded_from: str) -> ServiceConfig:
         source_protocol=s["source_protocol"],
         dns_a=s.get("dns_a"),
         aliases=s.get("aliases", []),
+        custom_headers=s.get("custom_headers", {}),
         loaded_from=loaded_from,
     )
 
