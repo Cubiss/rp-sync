@@ -45,7 +45,8 @@ class NginxConfigWriter:
         conf_dir.mkdir(parents=True, exist_ok=True)
 
         p = self.cfg.prefix
-        self._write_file(conf_dir / f"{p}-global.conf", _GLOBAL_CONF)
+        global_conf = _GLOBAL_CONF + f'add_header X-Served-By "{p}" always;\n'
+        self._write_file(conf_dir / f"{p}-global.conf", global_conf)
 
         managed_files = {f"{p}-global.conf"}
         for svc in services:
