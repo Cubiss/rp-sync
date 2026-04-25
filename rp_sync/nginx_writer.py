@@ -14,6 +14,18 @@ ssl_protocols TLSv1.2 TLSv1.3;
 ssl_prefer_server_ciphers off;
 ssl_session_timeout 1d;
 ssl_session_cache shared:MozSSL:10m;
+
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
 """
 
 _PROXY_HEADERS = """\
