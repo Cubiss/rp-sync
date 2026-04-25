@@ -18,7 +18,7 @@ services:
       - /volume1/docker/rp-sync/secrets:/secrets:ro
       - /volume1/docker/rp-sync/logs:/logs:rw
       - /volume1/docker/rp-sync/health:/health:rw
-      - /volume1/docker/rp-sync/nginx/:/etc/nginx/
+      - /volume1/docker/rp-sync/nginx/conf.d:/etc/nginx/conf.d
       - /volume1/docker/rp-sync/certs:/certs
 
     command: ["rp-sync", "daemon"]
@@ -30,6 +30,6 @@ services:
     network_mode: host
 
     volumes:
-      - /volume1/docker/rp-sync/nginx/:/etc/nginx/:ro
+      - /volume1/docker/rp-sync/nginx/conf.d:/etc/nginx/conf.d:ro
       - /volume1/docker/rp-sync/certs:/certs:ro
       - /volume1/docker/rp-sync/logs/nginx:/var/log/nginx:rw
