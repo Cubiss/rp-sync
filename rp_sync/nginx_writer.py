@@ -45,8 +45,7 @@ class NginxConfigWriter:
         conf_dir.mkdir(parents=True, exist_ok=True)
 
         p = self.cfg.prefix
-        global_conf = _GLOBAL_CONF + f'add_header X-Served-By "{p}" always;\n'
-        self._write_file(conf_dir / f"{p}-global.conf", global_conf)
+        self._write_file(conf_dir / f"{p}-global.conf", _GLOBAL_CONF)
 
         managed_files = {f"{p}-global.conf"}
         for svc in services:
@@ -88,6 +87,17 @@ class NginxConfigWriter:
         lines.append("    }")
         return lines
 
+    @staticmethod
+    def _error_page_lines() -> List[str]:
+        return [
+            "    error_page 400 401 403 404 429 500 502 503 504 /rp-sync-error.html;",
+            "    location = /rp-sync-error.html {",
+            "        internal;",
+            "        ssi on;",
+            "        root /usr/share/nginx/html;",
+            "    }",
+        ]
+
     def _service_blocks(
         self, svc: ServiceConfig, profile: Optional[AccessControlProfile]
     ) -> List[str]:
@@ -111,6 +121,8 @@ class NginxConfigWriter:
                 lines.extend(acl)
             lines.append("")
             lines.extend(self._proxy_location(svc.dest_url, svc.custom_headers))
+            lines.append("")
+            lines.extend(self._error_page_lines())
             lines.append("}")
             blocks.append("\n".join(lines))
 
@@ -153,6 +165,8 @@ class NginxConfigWriter:
                 lines.extend(acl)
             lines.append("")
             lines.extend(self._proxy_location(svc.dest_url, svc.custom_headers))
+            lines.append("")
+            lines.extend(self._error_page_lines())
             lines.append("}")
             blocks.append("\n".join(lines))
 
