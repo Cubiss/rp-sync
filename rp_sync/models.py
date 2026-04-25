@@ -7,13 +7,15 @@ Protocol = Literal["http", "https"]
 
 
 @dataclass
-class DsmConfig:
-    host: str
-    port: int = 5001
-    https: bool = True
-    verify_ssl: bool = True
-    username_file: str = ""
-    password_file: str = ""
+class AccessControlRule:
+    address: str
+    allow: bool = True
+
+
+@dataclass
+class AccessControlProfile:
+    name: str
+    rules: List[AccessControlRule] = field(default_factory=list)
 
 
 @dataclass
@@ -40,11 +42,9 @@ class CertsConfig:
 
 
 @dataclass
-class RedirectConfig:
-    enabled: bool = True
-    bind_host: str = "127.0.0.1"
-    backend_host: Optional[str] = None
-    port: int = 9179
+class NginxConfig:
+    conf_path: str = "/etc/nginx/conf.d/rp-sync.conf"
+    certs_dir: str = "/certs"
 
 
 @dataclass
@@ -57,27 +57,14 @@ class ServiceConfig:
     dns_a: Optional[str] = None
     aliases: List[str] = field(default_factory=list)
     custom_headers: Dict[str, str] = field(default_factory=dict)
+    access_control_profile: Optional[str] = None
     loaded_from: Optional[str] = None
 
 
 @dataclass
 class RootConfig:
-    dsm: DsmConfig
     dns: list[DnsZone]
     certs: CertsConfig
-    redirect: RedirectConfig = field(default_factory=RedirectConfig)
-
-
-@dataclass
-class ReverseProxyRule:
-    description: str
-    src_host: str
-    src_port: int
-    src_protocol: Protocol
-
-    dst_host: str
-    dst_port: int
-    dst_protocol: Protocol
-
-    enabled: bool = True
-    custom_headers: Dict[str, str] = field(default_factory=dict)
+    nginx: NginxConfig = field(default_factory=NginxConfig)
+    access_control_profiles: List[AccessControlProfile] = field(default_factory=list)
+    default_access_control_profile: Optional[str] = None

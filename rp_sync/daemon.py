@@ -20,10 +20,9 @@ from .dns_updater import DnsUpdater
 from .logging_utils import Logger
 from .models import RootConfig, ServiceConfig
 from .step_ca import StepCAClient
-from .dsm import DsmSession, DsmCertificateClient, _read_secret, DsmReverseProxyClient
+from .nginx_writer import NginxConfigWriter
 from .orchestrator import SyncContext, SyncOrchestrator
 from .service import get_services_path, load_services, SERVICE_FILE_SUFFIX
-from .redirect_backend import RedirectBackend
 
 
 class Daemon:
@@ -33,27 +32,19 @@ class Daemon:
         self,
         logger: Logger,
         core_config: RootConfig,
-        dsm_session: DsmSession,
         dns_updater: DnsUpdater,
         step_ca: StepCAClient,
-        dsm_certs: DsmCertificateClient,
-        dsm_rp: DsmReverseProxyClient,
+        nginx_writer: NginxConfigWriter,
     ) -> None:
         self.logger = logger
         self.core_config = core_config
 
-        self.redirect_backend = RedirectBackend(logger, core_config.redirect)
-        self.redirect_backend.start()
-
         self.ctx = SyncContext(
             cfg=core_config,
-            dsm_session=dsm_session,
             dns_updater=dns_updater,
             step_ca=step_ca,
-            dsm_certs=dsm_certs,
-            dsm_rp=dsm_rp,
+            nginx_writer=nginx_writer,
             services=[],
-            redirect_backend=self.redirect_backend,
         )
 
         self._stop_event = threading.Event()
@@ -63,32 +54,21 @@ class Daemon:
     def _init_connectors(
         logger: Logger,
         cfg: RootConfig,
-    ) -> tuple[DsmSession, DnsUpdater, StepCAClient, DsmCertificateClient, DsmReverseProxyClient]:
-        dsm_session = DsmSession(cfg.dsm, logger)
-        username = _read_secret(cfg.dsm.username_file)
-        password = _read_secret(cfg.dsm.password_file)
-        dsm_session.login(username, password)
-
+    ) -> tuple[DnsUpdater, StepCAClient, NginxConfigWriter]:
         dns_updater = DnsUpdater(cfg.dns, logger)
         step_ca = StepCAClient(cfg.certs, logger)
-        dsm_certs = DsmCertificateClient(dsm_session, logger)
-        dsm_rp = DsmReverseProxyClient(dsm_session, logger)
-
-        return dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp
+        nginx_writer = NginxConfigWriter(cfg.nginx)
+        return dns_updater, step_ca, nginx_writer
 
     @staticmethod
     def from_core_config(logger: Logger, core_config: RootConfig) -> "Daemon":
-        dsm_session, dns_updater, step_ca, dsm_certs, dsm_rp = Daemon._init_connectors(
-            logger, core_config
-        )
+        dns_updater, step_ca, nginx_writer = Daemon._init_connectors(logger, core_config)
         return Daemon(
             logger=logger,
             core_config=core_config,
-            dsm_session=dsm_session,
             dns_updater=dns_updater,
             step_ca=step_ca,
-            dsm_certs=dsm_certs,
-            dsm_rp=dsm_rp,
+            nginx_writer=nginx_writer,
         )
 
     @staticmethod
@@ -252,13 +232,11 @@ class Daemon:
             self._stop_event.wait(poll_seconds)
 
         self.logger.info("[watcher] Stop signal received – shutting down gracefully")
-        self.redirect_backend.stop()
 
     def sync_once(
         self, services: Optional[List[ServiceConfig]] = None, source: str = "full"
     ) -> Tuple[List[str], Optional[datetime]]:
         all_services = load_services()
-        self.redirect_backend.update_from_services(all_services)
         self.ctx.services = all_services if services is None else services
 
         self.logger.info(f"Starting sync run [{source}] ({len(self.ctx.services)} service(s))")

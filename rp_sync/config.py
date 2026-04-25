@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 import yaml
 
-from .models import RootConfig, DsmConfig, DnsZone, CertsConfig, RedirectConfig
+from .models import AccessControlProfile, AccessControlRule, RootConfig, DnsZone, CertsConfig, NginxConfig
 
 APP_NAME = "rp-sync"
 
@@ -44,28 +44,18 @@ def _load_core_raw(path: str | None = None) -> Dict[str, Any]:
 def load_root_config(path: str | None = None) -> RootConfig:
     raw = _load_core_raw(path)
 
-    dsm_raw = raw["dsm"]
     dns_raw = raw["dns"]
     certs_raw = raw.get("certs", {})
-    redirect_raw = raw.get("redirect", {})
-
-    dsm = DsmConfig(
-        host=dsm_raw["host"],
-        port=dsm_raw.get("port", 5001),
-        https=dsm_raw.get("https", True),
-        verify_ssl=dsm_raw.get("verify_ssl", True),
-        username_file=dsm_raw["username_file"],
-        password_file=dsm_raw["password_file"],
-    )
+    nginx_raw = raw.get("nginx", {})
+    ac_profiles_raw = raw.get("access_control_profiles", [])
+    default_ac_profile = raw.get("default_access_control_profile")
 
     dns_zones: list[DnsZone] = []
-
     for z_raw in dns_raw:
-        server = z_raw["server"]
         dns_zones.append(
             DnsZone(
                 zone=z_raw["zone"],
-                server=server,
+                server=z_raw["server"],
                 tsig_key_file=z_raw.get("tsig_key_file"),
             )
         )
@@ -81,39 +71,27 @@ def load_root_config(path: str | None = None) -> RootConfig:
         root_ca=certs_raw.get("root_ca"),
     )
 
-    if redirect_raw is None:
-        redirect_raw = {}
-    if not isinstance(redirect_raw, dict):
-        raise ValueError("'redirect' must be a mapping")
-
-    enabled_raw = redirect_raw.get("enabled", True)
-    if isinstance(enabled_raw, str):
-        enabled = enabled_raw.strip().lower() not in ("0", "false", "no", "off")
-    else:
-        enabled = bool(enabled_raw)
-
-    redirect = RedirectConfig(
-        enabled=enabled,
-        bind_host=str(redirect_raw.get("bind_host", "127.0.0.1")),
-        backend_host=redirect_raw.get("backend_host"),
-        port=int(redirect_raw.get("port", 18080)),
+    nginx = NginxConfig(
+        conf_path=nginx_raw.get("conf_path", "/etc/nginx/conf.d/rp-sync.conf"),
+        certs_dir=nginx_raw.get("certs_dir", "/certs"),
     )
-    if redirect.backend_host is not None:
-        redirect.backend_host = str(redirect.backend_host)
-    else:
-        redirect.backend_host = redirect.bind_host
 
-    return RootConfig(dsm=dsm, dns=dns_zones, certs=certs, redirect=redirect)
+    ac_profiles: list[AccessControlProfile] = []
+    for p in ac_profiles_raw:
+        rules = [
+            AccessControlRule(address=r["address"], allow=r.get("allow", True))
+            for r in p.get("rules", [])
+        ]
+        ac_profiles.append(AccessControlProfile(name=p["name"], rules=rules))
+
+    return RootConfig(
+        dns=dns_zones,
+        certs=certs,
+        nginx=nginx,
+        access_control_profiles=ac_profiles,
+        default_access_control_profile=default_ac_profile,
+    )
 
 
 def load_config(path: str | None = None) -> RootConfig:
-    """Backwards-compatible loader: root config + services.
-
-    - Root config always comes from RP_SYNC_CONFIG_PATH / *path*.
-    - Services come from:
-        * *path* if explicitly provided (treat it as the service file), or
-        * service_config.get_services_path() otherwise (supporting directories).
-    """
-    core = load_root_config(path=path)
-
-    return RootConfig(dsm=core.dsm, dns=core.dns, certs=core.certs, redirect=core.redirect)
+    return load_root_config(path=path)

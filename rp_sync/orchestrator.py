@@ -1,30 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
-from urllib.parse import urlparse
+from typing import Dict, List, Optional, Tuple
 import traceback
 
 from .logging_utils import Logger
-from .models import RootConfig, ServiceConfig, ReverseProxyRule, Protocol
+from .models import AccessControlProfile, RootConfig, ServiceConfig, Protocol
 from .dns_updater import DnsUpdater
-from .step_ca import StepCAClient
-from .dsm import DsmSession, DsmCertificateClient, DsmReverseProxyClient
-from .redirect_backend import RedirectBackend
+from .step_ca import StepCAClient, read_cert_expiry
+from .nginx_writer import NginxConfigWriter
+from urllib.parse import urlparse
 
 
 @dataclass
 class SyncContext:
     cfg: RootConfig
-    dsm_session: DsmSession
     dns_updater: DnsUpdater
     step_ca: StepCAClient
-    dsm_certs: DsmCertificateClient
-    dsm_rp: DsmReverseProxyClient
+    nginx_writer: NginxConfigWriter
     services: List[ServiceConfig]
-    redirect_backend: RedirectBackend
 
 
 class SyncOrchestrator:
@@ -36,13 +32,9 @@ class SyncOrchestrator:
         errors: List[str] = []
         next_checks: List[datetime] = []
 
-        # 0) Optional: global HTTP->HTTPS redirect rules
-        try:
-            self._sync_http_redirect()
-        except Exception:
-            tb = traceback.format_exc()
-            self.logger.error("\n[orchestrator] Failed to sync http_redirect:\n" + tb)
-            return ["__http_redirect__"], None
+        profiles: Dict[str, AccessControlProfile] = {
+            p.name: p for p in self.ctx.cfg.access_control_profiles
+        }
 
         for svc in self.ctx.services:
             try:
@@ -54,6 +46,19 @@ class SyncOrchestrator:
                 tb = traceback.format_exc()
                 self.logger.error(f"\n[orchestrator] Failed to sync service '{svc.name}':\n{tb}")
 
+        # Write nginx config after all certs are in place
+        try:
+            self.ctx.nginx_writer.write(
+                self.ctx.services,
+                profiles,
+                self.ctx.cfg.default_access_control_profile,
+            )
+            self.logger.info("[nginx] Config written successfully")
+        except Exception:
+            tb = traceback.format_exc()
+            self.logger.error("\n[orchestrator] Failed to write nginx config:\n" + tb)
+            errors.append("__nginx_config__")
+
         earliest = min(next_checks) if next_checks else None
 
         if errors:
@@ -63,64 +68,8 @@ class SyncOrchestrator:
         self.logger.info("\nAll services processed successfully.")
         return errors, earliest
 
-    def _sync_http_redirect(self) -> None:
-        hr = getattr(self.ctx.cfg, "http_redirect", None)
-        if not hr or not hr.enabled:
-            return
-
-        proto, host, port = parse_dest_url(hr.backend_url)
-        if proto != "http":
-            raise ValueError(
-                f"http_redirect.backend_url must be http://..., got '{hr.backend_url}'"
-            )
-
-        if hr.mode == "catch_all":
-            rp_rule = ReverseProxyRule(
-                description="rp-sync http->https redirect (catch-all)",
-                src_host="*",
-                src_port=int(hr.source_port),
-                src_protocol="http",
-                dst_host=host,
-                dst_port=int(port),
-                dst_protocol="http",
-            )
-            self.ctx.dsm_rp.upsert_rule(rp_rule)
-            self.logger.info(
-                f"[http_redirect] Installed catch-all HTTP:{hr.source_port} redirect rule"
-            )
-            return
-
-        if hr.mode == "per_host":
-            # Create one http rule per HTTPS hostname. This allows opt-outs.
-            for svc in self.ctx.services:
-                if svc.source_protocol != "https":
-                    continue
-                if getattr(svc, "allow_http", False):
-                    continue
-                for hostname in [svc.host, *svc.aliases]:
-                    rp_rule = ReverseProxyRule(
-                        description=f"{svc.name} ({hostname}) http->https",
-                        src_host=hostname,
-                        src_port=int(hr.source_port),
-                        src_protocol="http",
-                        dst_host=host,
-                        dst_port=int(port),
-                        dst_protocol="http",
-                    )
-                    self.ctx.dsm_rp.upsert_rule(rp_rule)
-            self.logger.info(
-                f"[http_redirect] Installed per-host HTTP:{hr.source_port} redirect rules"
-            )
-            return
-
-        raise ValueError(
-            f"Unknown http_redirect.mode '{hr.mode}'. Expected 'catch_all' or 'per_host'."
-        )
-
     def _sync_service(self, svc: ServiceConfig) -> Optional[datetime]:
-        canonical = svc.host
-        aliases = list(svc.aliases)
-        all_hosts: List[str] = [canonical, *aliases]
+        all_hosts: List[str] = [svc.host, *svc.aliases]
 
         self.logger.info(f"\n=== Service: {svc.name} ===")
         if svc.loaded_from:
@@ -132,99 +81,38 @@ class SyncOrchestrator:
             for hostname in all_hosts:
                 self.ctx.dns_updater.ensure_a_record(hostname, svc.dns_a)
 
-        dst_protocol, dst_host, dst_port = parse_dest_url(svc.dest_url)
+        if not self.ctx.step_ca.enabled or svc.source_protocol != "https":
+            return None
 
-        self.ctx.dsm_rp.upsert_rule(
-            ReverseProxyRule(
-                description=f"{svc.name} ({canonical})",
-                src_host=canonical,
-                src_port=svc.source_port,
-                src_protocol=svc.source_protocol,
-                dst_host=dst_host,
-                dst_port=dst_port,
-                dst_protocol=dst_protocol,
-                custom_headers=svc.custom_headers,
-            )
-        )
+        cert_dir = Path(self.ctx.cfg.nginx.certs_dir) / svc.name
+        cert_path = cert_dir / "cert.pem"
+        key_path = cert_dir / "key.pem"
+        renew_before_h = int(self.ctx.cfg.certs.renew_before_hours)
 
-        if self.ctx.redirect_backend.enabled:
-            rb_host, rb_port, rb_proto = self.ctx.redirect_backend.destination()
-            if aliases:
-                for a in aliases:
-                    self.ctx.dsm_rp.upsert_rule(
-                        ReverseProxyRule(
-                            description=f"{svc.name} (redirect {a} -> {canonical})",
-                            src_host=a,
-                            src_port=svc.source_port,
-                            src_protocol=svc.source_protocol,
-                            dst_host=rb_host,
-                            dst_port=rb_port,
-                            dst_protocol=rb_proto,
-                        )
-                    )
-
-            if svc.source_protocol == "https":
-                for h in all_hosts:
-                    self.ctx.dsm_rp.upsert_rule(
-                        ReverseProxyRule(
-                            description=f"{svc.name} (redirect http -> https {h})",
-                            src_host=h,
-                            src_port=80,
-                            src_protocol="http",
-                            dst_host=rb_host,
-                            dst_port=rb_port,
-                            dst_protocol=rb_proto,
-                        )
-                    )
-
-        if self.ctx.step_ca.enabled and svc.source_protocol == "https":
-            cn = svc.host
-            sans = all_hosts
-            dsm_cert_name = f"rp-sync-{svc.name}"
-
-            existing = self.ctx.dsm_certs.find_certificate_by_name(dsm_cert_name)
-            renew_window_h = int(getattr(self.ctx.cfg.certs, "renew_before_hours", 168))
-
-            if existing:
-                assigned = self.ctx.dsm_certs.is_assigned_to_reverse_proxy_hosts(
-                    dsm_cert_name, hostnames=all_hosts
-                )
-                expiring = self.ctx.dsm_certs.expires_within_hours(existing, hours=renew_window_h)
-
-                if (not expiring) and assigned:
-                    expiry_dt = self.ctx.dsm_certs.parse_expiry_dt(existing)
-                    next_check = (expiry_dt - timedelta(hours=renew_window_h)) if expiry_dt else None
+        if cert_path.exists():
+            expiry = read_cert_expiry(cert_path)
+            if expiry is not None:
+                now = datetime.now(timezone.utc)
+                renew_after = expiry - timedelta(hours=renew_before_h)
+                if now < renew_after:
                     self.logger.info(
-                        f"[TLS] '{dsm_cert_name}' already valid and assigned to all hosts; "
-                        f"next check scheduled at {next_check}"
+                        f"[TLS] '{svc.name}' cert valid until {expiry}; "
+                        f"next renewal at {renew_after}"
                     )
-                    return next_check
-
-                if (not expiring) and (not assigned):
-                    self.logger.info(
-                        f"[TLS] '{dsm_cert_name}' valid but not assigned everywhere; assigning only (no re-issue)"
-                    )
-                    self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(dsm_cert_name, hostnames=all_hosts)
-                    expiry_dt = self.ctx.dsm_certs.parse_expiry_dt(existing)
-                    return (expiry_dt - timedelta(hours=renew_window_h)) if expiry_dt else None
-
+                    return renew_after
                 self.logger.info(
-                    f"[TLS] '{dsm_cert_name}' exists but expiring soon (<= {renew_window_h}h); renewing"
+                    f"[TLS] '{svc.name}' cert expiring soon ({expiry}); renewing"
                 )
+            else:
+                self.logger.warning(f"[TLS] Could not read expiry for '{svc.name}'; renewing")
+        else:
+            self.logger.info(f"[TLS] No cert found for '{svc.name}'; issuing")
 
-            tmp_dir = Path("/tmp")
-            cert_path = tmp_dir / f"{svc.name}.crt"
-            key_path = tmp_dir / f"{svc.name}.key"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        self.ctx.step_ca.obtain_certificate(svc.host, all_hosts, cert_path, key_path)
 
-            self.ctx.step_ca.obtain_certificate(cn, sans, cert_path, key_path)
-
-            cert_pem = cert_path.read_text(encoding="utf-8")
-            key_pem = key_path.read_text(encoding="utf-8")
-
-            self.ctx.dsm_certs.import_or_replace_certificate(dsm_cert_name, cert_pem, key_pem)
-            self.ctx.dsm_certs.assign_to_reverse_proxy_hosts(dsm_cert_name, hostnames=all_hosts)
-
-        return None
+        expiry = read_cert_expiry(cert_path)
+        return (expiry - timedelta(hours=renew_before_h)) if expiry else None
 
 
 def parse_dest_url(url: str) -> Tuple[Protocol, str, int]:

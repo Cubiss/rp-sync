@@ -61,6 +61,7 @@ def _service_from_dict(s: Dict[str, Any], loaded_from: str) -> ServiceConfig:
         dns_a=s.get("dns_a"),
         aliases=s.get("aliases", []),
         custom_headers=s.get("custom_headers", {}),
+        access_control_profile=s.get("access_control_profile"),
         loaded_from=loaded_from,
     )
 
