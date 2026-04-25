@@ -72,8 +72,10 @@ def load_root_config(path: str | None = None) -> RootConfig:
     )
 
     nginx = NginxConfig(
-        conf_path=nginx_raw.get("conf_path", "/etc/nginx/conf.d/rp-sync.conf"),
+        conf_dir=nginx_raw.get("conf_dir", "/etc/nginx/conf.d"),
         certs_dir=nginx_raw.get("certs_dir", "/certs"),
+        cleanup=bool(nginx_raw.get("cleanup", True)),
+        prefix=str(nginx_raw.get("prefix", "rp-sync")),
     )
 
     ac_profiles: list[AccessControlProfile] = []

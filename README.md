@@ -4,7 +4,7 @@ Keeps nginx reverse proxy rules, DNS A records, and step-ca TLS certificates in 
 
 ## Architecture
 
-Two containers share named volumes for nginx config and certificates:
+Two containers share a named volume for nginx config; certificates use a bind mount:
 
 ```
 rp-sync container          nginx container
@@ -97,8 +97,12 @@ certs:
 # Both paths must match the volumes mounted in docker-compose.yml.
 # ---------------------------------------------------------------------------
 nginx:
-  conf_path: /etc/nginx/conf.d/rp-sync.conf   # where to write the generated nginx config
-  certs_dir: /certs                            # root dir for certs; each service gets a subdir
+  conf_dir: /etc/nginx/conf.d   # directory where nginx configs are written
+  certs_dir: /certs             # root dir for certs; each service gets a subdir
+  cleanup: true                 # delete orphaned managed configs on sync;
+                                # set false to preserve all configs (useful for testing)
+  prefix: rp-sync              # filename prefix for generated configs ({prefix}-{service}.conf);
+                                # change when running multiple instances against the same conf_dir
 
 # ---------------------------------------------------------------------------
 # Access control profiles (optional)
@@ -193,6 +197,21 @@ Certificates are stored at `{certs_dir}/{service_name}/cert.pem` and `key.pem`. 
 
 ## nginx config
 
-The generated config lives at `nginx.conf_path`. nginx reloads it automatically via `inotifywait` in the nginx container's entrypoint whenever rp-sync writes a new version. The config is written atomically (temp file + rename) so nginx never reads a partial file.
+rp-sync writes one config file per service into `nginx.conf_dir`:
 
-A failed `nginx -t` check will keep the previous config in place and log an error.
+```
+rp-sync-global.conf       ← SSL session settings, always present
+rp-sync-jellyfin.conf     ← managed by rp-sync
+rp-sync-wireguard-ui.conf ← managed by rp-sync
+extra.conf                ← manually placed, never touched by rp-sync
+```
+
+When `cleanup: true`, rp-sync deletes any `{prefix}-*.conf` file in `conf_dir` that no longer corresponds to a known service. Files outside the prefix are never touched, so multiple instances can safely share the same `conf_dir` with distinct prefixes.
+
+Files are written atomically (temp file + rename) so nginx never reads a partial config. nginx reloads automatically via `inotifywait` in the nginx container's entrypoint on each write.
+
+A failed `nginx -t` check keeps the previous config in place and logs an error.
+
+## nginx logs
+
+Access and error logs are written to `/var/log/nginx/` inside the nginx container, bind-mounted to `/volume1/docker/rp-sync/logs/nginx/` on the host.

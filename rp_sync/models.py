@@ -43,8 +43,10 @@ class CertsConfig:
 
 @dataclass
 class NginxConfig:
-    conf_path: str = "/etc/nginx/conf.d/rp-sync.conf"
+    conf_dir: str = "/etc/nginx/conf.d"
     certs_dir: str = "/certs"
+    cleanup: bool = True
+    prefix: str = "rp-sync"
 
 
 @dataclass

@@ -53,7 +53,7 @@ class SyncOrchestrator:
                 profiles,
                 self.ctx.cfg.default_access_control_profile,
             )
-            self.logger.info("[nginx] Config written successfully")
+            self.logger.info(f"[nginx] Config written to {self.ctx.cfg.nginx.conf_dir}")
         except Exception:
             tb = traceback.format_exc()
             self.logger.error("\n[orchestrator] Failed to write nginx config:\n" + tb)

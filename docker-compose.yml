@@ -29,7 +29,12 @@ services:
     restart: unless-stopped
     network_mode: host
 
+    expose:
+      - "80"
+      - "443"
+
     volumes:
       - /volume1/docker/rp-sync/nginx/conf.d:/etc/nginx/conf.d:ro
       - /volume1/docker/rp-sync/certs:/certs:ro
       - /volume1/docker/rp-sync/logs/nginx:/var/log/nginx:rw
+
