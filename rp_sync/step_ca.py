@@ -21,6 +21,17 @@ def read_cert_expiry(cert_path: Path) -> Optional[datetime]:
         return None
 
 
+def cert_covers_hosts(cert_path: Path, hosts: List[str]) -> bool:
+    """Return True if the cert's SANs cover all requested hosts."""
+    try:
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        cert_dns_names = {name.lower() for name in san_ext.value.get_values_for_type(x509.DNSName)}
+        return all(h.lower() in cert_dns_names for h in hosts)
+    except Exception:
+        return False
+
+
 class StepCAClient:
     def __init__(self, cfg: CertsConfig, logger: Logger):
         self.cfg = cfg

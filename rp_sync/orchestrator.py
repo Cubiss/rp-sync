@@ -9,7 +9,7 @@ import traceback
 from .logging_utils import Logger
 from .models import AccessControlProfile, RootConfig, ServiceConfig, Protocol
 from .dns_updater import DnsUpdater
-from .step_ca import StepCAClient, read_cert_expiry
+from .step_ca import StepCAClient, read_cert_expiry, cert_covers_hosts
 from .nginx_writer import NginxConfigWriter
 from urllib.parse import urlparse
 
@@ -95,14 +95,19 @@ class SyncOrchestrator:
                 now = datetime.now(timezone.utc)
                 renew_after = expiry - timedelta(hours=renew_before_h)
                 if now < renew_after:
+                    if cert_covers_hosts(cert_path, all_hosts):
+                        self.logger.info(
+                            f"[TLS] '{svc.name}' cert valid until {expiry}; "
+                            f"next renewal at {renew_after}"
+                        )
+                        return renew_after
                     self.logger.info(
-                        f"[TLS] '{svc.name}' cert valid until {expiry}; "
-                        f"next renewal at {renew_after}"
+                        f"[TLS] '{svc.name}' cert SANs do not cover all hosts; renewing"
                     )
-                    return renew_after
-                self.logger.info(
-                    f"[TLS] '{svc.name}' cert expiring soon ({expiry}); renewing"
-                )
+                else:
+                    self.logger.info(
+                        f"[TLS] '{svc.name}' cert expiring soon ({expiry}); renewing"
+                    )
             else:
                 self.logger.warning(f"[TLS] Could not read expiry for '{svc.name}'; renewing")
         else:
