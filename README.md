@@ -193,7 +193,7 @@ is scanned recursively. Each file contains a list of service definitions.
 
 ## Certificates
 
-Certificates are stored at `{certs_dir}/{service_name}/cert.pem` and `key.pem`. They are issued by step-ca and renewed automatically within `renew_before_hours` of expiry. nginx reads them directly — no DSM involvement.
+Certificates are stored at `{certs_dir}/{service_name}/cert.pem` and `key.pem`. They are issued by step-ca and renewed automatically within `renew_before_hours` of expiry and on alias changes.
 
 ## nginx config
 
