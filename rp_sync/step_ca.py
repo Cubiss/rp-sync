@@ -91,5 +91,8 @@ class StepCAClient:
             cmd.extend(["--password-file", self.cfg.provisioner_password_file])
 
         self.logger.info(f"[step-ca] Issuing certificate for {common_name} ({', '.join(sans)})")
-        subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            output = (result.stdout + result.stderr).strip()
+            raise RuntimeError(f"[step-ca] step CLI failed for {common_name}:\n{output}")
         self.logger.info(f"[step-ca] Wrote cert: {out_crt}, key: {out_key}")
