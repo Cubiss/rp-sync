@@ -237,6 +237,7 @@ class Daemon:
         self, services: Optional[List[ServiceConfig]] = None, source: str = "full"
     ) -> Tuple[List[str], Optional[datetime]]:
         all_services = load_services()
+        self.ctx.all_services = all_services
         self.ctx.services = all_services if services is None else services
 
         self.logger.info(f"Starting sync run [{source}] ({len(self.ctx.services)} service(s))")

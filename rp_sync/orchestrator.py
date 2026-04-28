@@ -41,6 +41,7 @@ class SyncContext:
     cert_provider: CertProvider
     nginx_writer: NginxConfigWriter
     services: List[ServiceConfig]
+    all_services: Optional[List[ServiceConfig]] = None
 
 
 class SyncOrchestrator:
@@ -59,15 +60,16 @@ class SyncOrchestrator:
             p.name: p for p in self.ctx.cfg.access_control_profiles
         }
         default_profile = self.ctx.cfg.default_access_control_profile
+        all_svcs = self.ctx.all_services if self.ctx.all_services is not None else self.ctx.services
 
-        # Pre-issuance write: HTTPS blocks only for certs that already exist.
-        # This ensures ACME challenge locations are served on port 80 before
-        # we ask Let's Encrypt to validate.
-        pre_maps = {svc.name: self._existing_cert_map(svc) for svc in self.ctx.services}
-        self.ctx.nginx_writer.write(self.ctx.services, profiles, default_profile, pre_maps)
+        # Pre-issuance write: use all known services so incremental syncs don't
+        # wipe configs for services that weren't part of this run.
+        # HTTPS blocks are included only for certs that already exist on disk.
+        pre_maps = {svc.name: self._existing_cert_map(svc) for svc in all_svcs}
+        self.ctx.nginx_writer.write(all_svcs, profiles, default_profile, pre_maps)
 
         post_maps: Dict[str, "SyncOrchestrator._CertMap"] = dict(pre_maps)
-        for svc in self.ctx.services:
+        for svc in self.ctx.services:  # process only the services for this run
             try:
                 next_check, cert_map = self._sync_service(svc)
                 post_maps[svc.name] = cert_map
@@ -80,7 +82,7 @@ class SyncOrchestrator:
 
         # Post-issuance write: all certs now in place.
         try:
-            self.ctx.nginx_writer.write(self.ctx.services, profiles, default_profile, post_maps)
+            self.ctx.nginx_writer.write(all_svcs, profiles, default_profile, post_maps)
             self.logger.info(f"[nginx] Config written to {self.ctx.cfg.nginx.conf_dir}")
         except Exception:
             tb = traceback.format_exc()
