@@ -43,14 +43,24 @@ class AcmeClient:
         self.cfg = cfg
         self.nginx_cfg = nginx_cfg
         self.logger = logger
-        self._state_dir = Path(nginx_cfg.certs_dir) / ".acme"
+        self._state_dir = Path(nginx_cfg.certs_write_dir) / ".acme"
 
     @property
     def enabled(self) -> bool:
         return self.cfg.enabled and self.cfg.provider == "letsencrypt"
 
+    @property
+    def name(self) -> Optional[str]:
+        return self.cfg.name
+
     def filter_sans(self, common_name: str, sans: List[str]) -> List[str]:
         return [s for s in sans if _is_public_hostname(s)]
+
+    def group_hosts(self, host: str, aliases: List[str]) -> list:
+        return [(self, [host] + aliases)]
+
+    def renew_before_hours(self) -> int:
+        return self.cfg.renew_before_hours
 
     # ------------------------------------------------------------------
     # Account key

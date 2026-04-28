@@ -16,11 +16,10 @@ from .config import (
     POLL_ENV,
     DEFAULT_POLL_SECONDS,
 )
-from .acme_client import AcmeClient
+from .cert_dispatcher import CertDispatcher
 from .dns_updater import DnsUpdater
 from .logging_utils import Logger
 from .models import RootConfig, ServiceConfig
-from .step_ca import StepCAClient
 from .nginx_writer import NginxConfigWriter
 from .orchestrator import SyncContext, SyncOrchestrator, CertProvider
 from .service import get_services_path, load_services, SERVICE_FILE_SUFFIX
@@ -58,10 +57,7 @@ class Daemon:
     ) -> tuple[DnsUpdater, CertProvider, NginxConfigWriter]:
         dns_updater = DnsUpdater(cfg.dns, logger)
         nginx_writer = NginxConfigWriter(cfg.nginx)
-        if cfg.certs.provider == "letsencrypt":
-            cert_provider: CertProvider = AcmeClient(cfg.certs, cfg.nginx, logger)
-        else:
-            cert_provider = StepCAClient(cfg.certs, logger)
+        cert_provider: CertProvider = CertDispatcher(cfg.certs, cfg.nginx, logger)
         return dns_updater, cert_provider, nginx_writer
 
     @staticmethod

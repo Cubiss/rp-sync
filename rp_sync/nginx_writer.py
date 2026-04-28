@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .models import AccessControlProfile, NginxConfig, ServiceConfig
 
@@ -87,11 +87,15 @@ server {{
         conf_dir.mkdir(parents=True, exist_ok=True)
         self._write_file(conf_dir / f"{self.cfg.prefix}-global.conf", self._global_conf())
 
+    # cert_map type: {hostname: (nginx_cert_path, nginx_key_path)}
+    _CertMap = Dict[str, Tuple[str, str]]
+
     def write(
         self,
         services: List[ServiceConfig],
         profiles: Dict[str, AccessControlProfile],
         default_profile: Optional[str],
+        cert_maps: Optional[Dict[str, "_CertMap"]] = None,
     ) -> None:
         conf_dir = Path(self.cfg.conf_dir)
         conf_dir.mkdir(parents=True, exist_ok=True)
@@ -103,7 +107,8 @@ server {{
         for svc in services:
             profile_name = svc.access_control_profile or default_profile
             profile = profiles.get(profile_name) if profile_name else None
-            content = _MANAGED_MARKER + "\n".join(self._service_blocks(svc, profile)) + "\n"
+            cert_map = cert_maps.get(svc.name) if cert_maps else None
+            content = _MANAGED_MARKER + "\n".join(self._service_blocks(svc, profile, cert_map)) + "\n"
             filename = f"{p}-{svc.name}.conf"
             self._write_file(conf_dir / filename, content)
             managed_files.add(filename)
@@ -151,16 +156,19 @@ server {{
         ]
 
     def _service_blocks(
-        self, svc: ServiceConfig, profile: Optional[AccessControlProfile]
+        self,
+        svc: ServiceConfig,
+        profile: Optional[AccessControlProfile],
+        cert_map: Optional["NginxConfigWriter._CertMap"] = None,
     ) -> List[str]:
         blocks: List[str] = []
         acl = self._acl_lines(profile)
 
         if svc.source_protocol == "https":
-            cert_pem, key_pem = self.cert_paths(svc.name)
-            write_crt, _ = self.cert_write_paths(svc.name)
+            host_cert = cert_map.get(svc.host) if cert_map else None
 
-            if Path(write_crt).exists():
+            if host_cert:
+                cert_pem, key_pem = host_cert
                 # Main HTTPS server block
                 lines = [f"server {{"] + self._listen_lines(svc.source_port, ssl=True) + [
                     f"    server_name {svc.host};",
@@ -178,10 +186,17 @@ server {{
                 lines.append("}")
                 blocks.append("\n".join(lines))
 
-                # Alias redirect block (HTTPS → canonical)
-                if svc.aliases:
+            # Alias redirect blocks — one block per distinct cert so each alias
+            # uses the cert that was issued by its matched provider.
+            if svc.aliases and cert_map:
+                alias_cert_groups: Dict[Tuple[str, str], List[str]] = {}
+                for alias in svc.aliases:
+                    alias_cert = cert_map.get(alias)
+                    if alias_cert:
+                        alias_cert_groups.setdefault(alias_cert, []).append(alias)
+                for (cert_pem, key_pem), aliases in alias_cert_groups.items():
                     lines = [f"server {{"] + self._listen_lines(svc.source_port, ssl=True) + [
-                        f"    server_name {' '.join(svc.aliases)};",
+                        f"    server_name {' '.join(aliases)};",
                         f"",
                         f"    ssl_certificate {cert_pem};",
                         f"    ssl_certificate_key {key_pem};",
@@ -203,8 +218,6 @@ server {{
                     f"        root {self.cfg.acme_nginx_path};",
                     f"    }}",
                 ]
-            # return at server level fires before location matching, so use
-            # location / to let the ACME challenge location take precedence.
             lines += [
                 f"",
                 f"    location / {{",

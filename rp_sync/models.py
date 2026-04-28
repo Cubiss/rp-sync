@@ -28,6 +28,8 @@ class DnsZone:
 @dataclass
 class CertsConfig:
     provider: str = "step-ca"  # "step-ca", "letsencrypt", or "none"
+    name: Optional[str] = None  # used as subdirectory name for alias cert groups
+    zone: Optional[str] = None  # zone this entry applies to; None = catch-all
     email: Optional[str] = None  # required for letsencrypt
     ca_url: str = ""
     ca_fingerprint: str = ""
@@ -95,7 +97,7 @@ class ServiceConfig:
 @dataclass
 class RootConfig:
     dns: list[DnsZone]
-    certs: CertsConfig
+    certs: List[CertsConfig]
     nginx: NginxConfig = field(default_factory=NginxConfig)
     access_control_profiles: List[AccessControlProfile] = field(default_factory=list)
     default_access_control_profile: Optional[str] = None

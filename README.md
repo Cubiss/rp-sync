@@ -80,29 +80,33 @@ dns:
 # writes them to the certs volume for nginx to read.
 # ---------------------------------------------------------------------------
 certs:
-  provider: step-ca         # step-ca (default) | letsencrypt | none
+  # certs is a list of provider entries. The most specific matching zone wins.
+  # Omit zone to make an entry the catch-all (used when no zone matches).
+  # A single entry without a zone is equivalent to the old single-provider setup.
 
-  # ---------------------------------------------------------------------------
-  # step-ca provider
-  # ---------------------------------------------------------------------------
-  ca_url: https://ca.example.com:8443   # step-ca server URL
-  root_ca: ./secrets/root_ca.crt        # CA trust anchor passed to the step CLI (optional)
-  ca_fingerprint: ""                    # root CA fingerprint; alternative to root_ca (optional)
+  - name: public            # optional — used as subdirectory name for alias cert groups
+                            # e.g. certs/myservice/public/cert.pem
+                            # falls back to "group-N" when omitted
+    provider: letsencrypt   # step-ca (default) | letsencrypt | none
+    zone: example.com.      # zone this entry applies to (trailing dot required); omit for catch-all
+    email: admin@example.com  # registration email (required for letsencrypt)
 
-  provisioner: admin@example.com        # JWK provisioner name
-  provisioner_password_file: ./secrets/step_provisioner_password
+  - name: internal
+    provider: step-ca       # catch-all
+    # ---------------------------------------------------------------------------
+    # step-ca fields
+    # ---------------------------------------------------------------------------
+    ca_url: https://ca.example.com:8443   # step-ca server URL
+    root_ca: ./secrets/root_ca.crt        # CA trust anchor (optional)
+    ca_fingerprint: ""                    # alternative to root_ca (optional)
+    provisioner: admin@example.com        # JWK provisioner name
+    provisioner_password_file: ./secrets/step_provisioner_password
+    default_ltl_hours: 2160   # requested lifetime in hours; default: 2160 (90 days)
 
-  default_ltl_hours: 2160   # requested certificate lifetime in hours; default: 2160 (90 days)
-
-  # ---------------------------------------------------------------------------
-  # letsencrypt provider
-  # ---------------------------------------------------------------------------
-  # email: admin@example.com   # registration email (required)
-
-  # ---------------------------------------------------------------------------
-  # shared
-  # ---------------------------------------------------------------------------
-  renew_before_hours: 168   # renew when expiry is within this many hours; default: 168 (7 days)
+    # ---------------------------------------------------------------------------
+    # shared fields
+    # ---------------------------------------------------------------------------
+    renew_before_hours: 168   # renew when expiry is within this many hours; default: 168 (7 days)
 
 # ---------------------------------------------------------------------------
 # Nginx config output (optional — shown with defaults)

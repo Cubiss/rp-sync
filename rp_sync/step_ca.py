@@ -42,8 +42,18 @@ class StepCAClient:
     def enabled(self) -> bool:
         return self.cfg.enabled
 
+    @property
+    def name(self) -> Optional[str]:
+        return self.cfg.name
+
     def filter_sans(self, common_name: str, sans: List[str]) -> List[str]:
         return sans
+
+    def group_hosts(self, host: str, aliases: List[str]) -> list:
+        return [(self, [host] + aliases)]
+
+    def renew_before_hours(self) -> int:
+        return self.cfg.renew_before_hours
 
     def obtain_certificate(
         self,

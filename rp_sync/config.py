@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import yaml
 
@@ -45,7 +45,7 @@ def load_root_config(path: str | None = None) -> RootConfig:
     raw = _load_core_raw(path)
 
     dns_raw = raw["dns"]
-    certs_raw = raw.get("certs", {})
+    certs_raw_top = raw.get("certs", {})
     nginx_raw = raw.get("nginx", {})
     ac_profiles_raw = raw.get("access_control_profiles", [])
     default_ac_profile = raw.get("default_access_control_profile")
@@ -60,17 +60,25 @@ def load_root_config(path: str | None = None) -> RootConfig:
             )
         )
 
-    certs = CertsConfig(
-        provider=str(certs_raw.get("provider", "step-ca")),
-        email=certs_raw.get("email"),
-        ca_url=certs_raw.get("ca_url", ""),
-        ca_fingerprint=certs_raw.get("ca_fingerprint", ""),
-        provisioner=certs_raw.get("provisioner", ""),
-        provisioner_password_file=certs_raw.get("provisioner_password_file"),
-        default_ltl_hours=int(certs_raw.get("default_ltl_hours", 2160)),
-        renew_before_hours=int(certs_raw.get("renew_before_hours", 168)),
-        root_ca=certs_raw.get("root_ca"),
+    # certs: accepts either a single mapping (legacy) or a list of zone entries
+    certs_list_raw: List[Dict[str, Any]] = (
+        certs_raw_top if isinstance(certs_raw_top, list) else [certs_raw_top]
     )
+    certs: List[CertsConfig] = []
+    for certs_raw in certs_list_raw:
+        certs.append(CertsConfig(
+            provider=str(certs_raw.get("provider", "step-ca")),
+            name=certs_raw.get("name"),
+            zone=certs_raw.get("zone"),
+            email=certs_raw.get("email"),
+            ca_url=certs_raw.get("ca_url", ""),
+            ca_fingerprint=certs_raw.get("ca_fingerprint", ""),
+            provisioner=certs_raw.get("provisioner", ""),
+            provisioner_password_file=certs_raw.get("provisioner_password_file"),
+            default_ltl_hours=int(certs_raw.get("default_ltl_hours", 2160)),
+            renew_before_hours=int(certs_raw.get("renew_before_hours", 168)),
+            root_ca=certs_raw.get("root_ca"),
+        ))
 
     nginx = NginxConfig(
         conf_dir=nginx_raw.get("conf_dir", "/etc/nginx/conf.d"),
