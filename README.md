@@ -80,8 +80,11 @@ dns:
 # writes them to the certs volume for nginx to read.
 # ---------------------------------------------------------------------------
 certs:
-  disabled: false           # set true to disable all cert management; default: false
+  provider: step-ca         # step-ca (default) | letsencrypt | none
 
+  # ---------------------------------------------------------------------------
+  # step-ca provider
+  # ---------------------------------------------------------------------------
   ca_url: https://ca.example.com:8443   # step-ca server URL
   root_ca: ./secrets/root_ca.crt        # CA trust anchor passed to the step CLI (optional)
   ca_fingerprint: ""                    # root CA fingerprint; alternative to root_ca (optional)
@@ -90,6 +93,15 @@ certs:
   provisioner_password_file: ./secrets/step_provisioner_password
 
   default_ltl_hours: 2160   # requested certificate lifetime in hours; default: 2160 (90 days)
+
+  # ---------------------------------------------------------------------------
+  # letsencrypt provider
+  # ---------------------------------------------------------------------------
+  # email: admin@example.com   # registration email (required)
+
+  # ---------------------------------------------------------------------------
+  # shared
+  # ---------------------------------------------------------------------------
   renew_before_hours: 168   # renew when expiry is within this many hours; default: 168 (7 days)
 
 # ---------------------------------------------------------------------------
@@ -99,10 +111,19 @@ certs:
 nginx:
   conf_dir: /etc/nginx/conf.d   # directory where nginx configs are written
   certs_dir: /certs             # root dir for certs; each service gets a subdir
+                                # use "write_path;nginx_path" when rp-sync runs outside the container:
+                                #   certs_dir: /mnt/nas/rp-sync/certs;/certs
   cleanup: true                 # delete orphaned managed configs on sync;
                                 # set false to preserve all configs (useful for testing)
   prefix: rp-sync              # filename prefix for generated configs ({prefix}-{service}.conf);
                                 # change when running multiple instances against the same conf_dir
+  ipv6: true                   # add listen [::]:port ipv6only=on directives; default: true
+  acme_webroot: /var/www/acme  # set when provider: letsencrypt
+                                # format: "write_path" or "write_path;nginx_path"
+                                # write_path: where rp-sync writes challenge tokens (local filesystem)
+                                # nginx_path: root directive in nginx config (defaults to /var/www/acme)
+                                # use the two-path form when rp-sync runs outside the container:
+                                #   acme_webroot: /mnt/nas/nginx/www/acme;/var/www/acme
 
 # ---------------------------------------------------------------------------
 # Access control profiles (optional)
@@ -193,7 +214,34 @@ is scanned recursively. Each file contains a list of service definitions.
 
 ## Certificates
 
-Certificates are stored at `{certs_dir}/{service_name}/cert.pem` and `key.pem`. They are issued by step-ca and renewed automatically within `renew_before_hours` of expiry and on alias changes.
+Certificates are stored at `{certs_dir}/{service_name}/cert.pem` and `key.pem`. They are renewed automatically when either the certificate is within `renew_before_hours` of expiry or its SANs no longer cover all configured hostnames.
+
+Set `certs.provider: none` to disable certificate management entirely.
+
+### step-ca (default)
+
+Set `certs.provider: step-ca` and configure `ca_url`, `provisioner`, and optionally `provisioner_password_file` and `root_ca`. The `step` CLI must be available inside the rp-sync container.
+
+### Let's Encrypt
+
+Set `certs.provider: letsencrypt`, `certs.email`, and `nginx.acme_webroot` in `config.yaml`:
+
+```yaml
+certs:
+  provider: letsencrypt
+  email: admin@example.com
+
+nginx:
+  acme_webroot: /var/www/acme
+```
+
+rp-sync uses the HTTP-01 challenge: certbot writes a token to `acme_webroot`, and nginx serves it from `/.well-known/acme-challenge/` on port 80. Domains must be **publicly reachable on port 80** for Let's Encrypt to validate them.
+
+The acme webroot is already mounted in both containers at `/var/www/acme` (host path: `/volume1/docker/rp-sync/nginx/www/acme`). No changes to `docker-compose.yml` are needed.
+
+Certificate issuance uses the `acme` Python library directly — no external binary required. The ACME account key is generated on first run and stored at `{certs_dir}/.acme/account.key` so it persists across restarts using the existing certs volume.
+
+By default rp-sync uses the Let's Encrypt production directory. Set `certs.ca_url` to the staging directory (`https://acme-staging-v02.api.letsencrypt.org/directory`) during testing to avoid hitting rate limits.
 
 ## nginx config
 

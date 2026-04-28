@@ -42,6 +42,9 @@ class StepCAClient:
     def enabled(self) -> bool:
         return self.cfg.enabled
 
+    def filter_sans(self, common_name: str, sans: List[str]) -> List[str]:
+        return sans
+
     def obtain_certificate(
         self,
         common_name: str,

@@ -16,12 +16,13 @@ from .config import (
     POLL_ENV,
     DEFAULT_POLL_SECONDS,
 )
+from .acme_client import AcmeClient
 from .dns_updater import DnsUpdater
 from .logging_utils import Logger
 from .models import RootConfig, ServiceConfig
 from .step_ca import StepCAClient
 from .nginx_writer import NginxConfigWriter
-from .orchestrator import SyncContext, SyncOrchestrator
+from .orchestrator import SyncContext, SyncOrchestrator, CertProvider
 from .service import get_services_path, load_services, SERVICE_FILE_SUFFIX
 
 
@@ -33,7 +34,7 @@ class Daemon:
         logger: Logger,
         core_config: RootConfig,
         dns_updater: DnsUpdater,
-        step_ca: StepCAClient,
+        cert_provider: CertProvider,
         nginx_writer: NginxConfigWriter,
     ) -> None:
         self.logger = logger
@@ -42,7 +43,7 @@ class Daemon:
         self.ctx = SyncContext(
             cfg=core_config,
             dns_updater=dns_updater,
-            step_ca=step_ca,
+            cert_provider=cert_provider,
             nginx_writer=nginx_writer,
             services=[],
         )
@@ -54,20 +55,23 @@ class Daemon:
     def _init_connectors(
         logger: Logger,
         cfg: RootConfig,
-    ) -> tuple[DnsUpdater, StepCAClient, NginxConfigWriter]:
+    ) -> tuple[DnsUpdater, CertProvider, NginxConfigWriter]:
         dns_updater = DnsUpdater(cfg.dns, logger)
-        step_ca = StepCAClient(cfg.certs, logger)
         nginx_writer = NginxConfigWriter(cfg.nginx)
-        return dns_updater, step_ca, nginx_writer
+        if cfg.certs.provider == "letsencrypt":
+            cert_provider: CertProvider = AcmeClient(cfg.certs, cfg.nginx, logger)
+        else:
+            cert_provider = StepCAClient(cfg.certs, logger)
+        return dns_updater, cert_provider, nginx_writer
 
     @staticmethod
     def from_core_config(logger: Logger, core_config: RootConfig) -> "Daemon":
-        dns_updater, step_ca, nginx_writer = Daemon._init_connectors(logger, core_config)
+        dns_updater, cert_provider, nginx_writer = Daemon._init_connectors(logger, core_config)
         return Daemon(
             logger=logger,
             core_config=core_config,
             dns_updater=dns_updater,
-            step_ca=step_ca,
+            cert_provider=cert_provider,
             nginx_writer=nginx_writer,
         )
 

@@ -18,6 +18,8 @@ from rp_sync.config import (
     DEFAULT_LOG_KEEP,
 )
 
+_SENTINEL = object()
+
 
 class Logger:
     _instances: Dict[str, "Logger"] = {}
@@ -28,7 +30,11 @@ class Logger:
         log_level: str = "INFO",
         keep: int = 10,
         log_dir: Optional[Path | str] = "./logs",
-    ):
+        _sentinel: object = None,
+    ) -> None:
+        if _sentinel is not _SENTINEL:
+            raise TypeError("Logger cannot be instantiated directly; use Logger.from_env()")
+
         self.app_name = app_name
         self.keep = keep
         self.log_dir = Path(log_dir)
@@ -49,15 +55,13 @@ class Logger:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
-        if not self._has_app_file_handlers():
-            self._add_file_handlers()
-
+        self._add_file_handlers()
         self._prune_old_logs()
         self.logger.debug(f"Logging initialized -> {self.file_path}")
 
     @classmethod
     def from_env(cls) -> "Logger":
-        key = f"{APP_NAME}"
+        key = APP_NAME
         if key in cls._instances:
             inst = cls._instances[key]
             inst.set_level(os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL))
@@ -67,6 +71,7 @@ class Logger:
             log_level=os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL),
             keep=int(os.environ.get(LOG_KEEP, DEFAULT_LOG_KEEP)),
             log_dir=os.environ.get(LOG_DIR, DEFAULT_LOG_DIR),
+            _sentinel=_SENTINEL,
         )
         cls._instances[key] = inst
         inst.add_console(os.environ.get(LOG_LEVEL, DEFAULT_LOG_LEVEL))
@@ -92,12 +97,6 @@ class Logger:
         ch.setLevel(getattr(logging, str(level).upper(), level))
         ch._app_console = True
         self.logger.addHandler(ch)
-
-    def _has_app_file_handlers(self) -> bool:
-        return any(
-            isinstance(h, logging.FileHandler) and getattr(h, "_app_file", False)
-            for h in self.logger.handlers
-        )
 
     def _add_file_handlers(self) -> None:
         lvl = self.logger.level

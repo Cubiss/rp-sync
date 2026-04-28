@@ -61,7 +61,8 @@ def load_root_config(path: str | None = None) -> RootConfig:
         )
 
     certs = CertsConfig(
-        disabled=certs_raw.get("disabled", False),
+        provider=str(certs_raw.get("provider", "step-ca")),
+        email=certs_raw.get("email"),
         ca_url=certs_raw.get("ca_url", ""),
         ca_fingerprint=certs_raw.get("ca_fingerprint", ""),
         provisioner=certs_raw.get("provisioner", ""),
@@ -76,6 +77,8 @@ def load_root_config(path: str | None = None) -> RootConfig:
         certs_dir=nginx_raw.get("certs_dir", "/certs"),
         cleanup=bool(nginx_raw.get("cleanup", True)),
         prefix=str(nginx_raw.get("prefix", "rp-sync")),
+        acme_webroot=nginx_raw.get("acme_webroot"),
+        ipv6=bool(nginx_raw.get("ipv6", True)),
     )
 
     ac_profiles: list[AccessControlProfile] = []

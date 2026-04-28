@@ -20,6 +20,7 @@ services:
       - /volume1/docker/rp-sync/health:/health:rw
       - /volume1/docker/rp-sync/nginx/conf.d:/etc/nginx/conf.d
       - /volume1/docker/rp-sync/certs:/certs
+      - /volume1/docker/rp-sync/nginx/www/acme:/var/www/acme:rw
 
     command: ["rp-sync", "daemon"]
 
@@ -35,6 +36,7 @@ services:
 
     volumes:
       - /volume1/docker/rp-sync/nginx/conf.d:/etc/nginx/conf.d:ro
+      - /volume1/docker/rp-sync/nginx/www/acme:/var/www/acme:ro
       - /volume1/docker/rp-sync/certs:/certs:ro
       - /volume1/docker/rp-sync/logs/nginx:/var/log/nginx:rw
 

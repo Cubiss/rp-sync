@@ -6,19 +6,32 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import traceback
 
+from typing import Protocol as TypingProtocol
+
 from .logging_utils import Logger
 from .models import AccessControlProfile, RootConfig, ServiceConfig, Protocol
 from .dns_updater import DnsUpdater
-from .step_ca import StepCAClient, read_cert_expiry, cert_covers_hosts
+from .step_ca import read_cert_expiry, cert_covers_hosts
 from .nginx_writer import NginxConfigWriter
 from urllib.parse import urlparse
+
+
+class CertProvider(TypingProtocol):
+    @property
+    def enabled(self) -> bool: ...
+
+    def filter_sans(self, common_name: str, sans: List[str]) -> List[str]: ...
+
+    def obtain_certificate(
+        self, common_name: str, sans: List[str], out_crt: Path, out_key: Path
+    ) -> None: ...
 
 
 @dataclass
 class SyncContext:
     cfg: RootConfig
     dns_updater: DnsUpdater
-    step_ca: StepCAClient
+    cert_provider: CertProvider
     nginx_writer: NginxConfigWriter
     services: List[ServiceConfig]
 
@@ -35,6 +48,15 @@ class SyncOrchestrator:
         profiles: Dict[str, AccessControlProfile] = {
             p.name: p for p in self.ctx.cfg.access_control_profiles
         }
+
+        # Write configs before cert issuance so nginx serves the ACME challenge
+        # location on port 80. HTTPS blocks are skipped for services without
+        # certs yet, so nginx -t won't fail on missing cert files.
+        self.ctx.nginx_writer.write(
+            self.ctx.services,
+            profiles,
+            self.ctx.cfg.default_access_control_profile,
+        )
 
         for svc in self.ctx.services:
             try:
@@ -81,10 +103,10 @@ class SyncOrchestrator:
             for hostname in all_hosts:
                 self.ctx.dns_updater.ensure_a_record(hostname, svc.dns_a)
 
-        if not self.ctx.step_ca.enabled or svc.source_protocol != "https":
+        if not self.ctx.cert_provider.enabled or svc.source_protocol != "https":
             return None
 
-        cert_dir = Path(self.ctx.cfg.nginx.certs_dir) / svc.name
+        cert_dir = Path(self.ctx.cfg.nginx.certs_write_dir) / svc.name
         cert_path = cert_dir / "cert.pem"
         key_path = cert_dir / "key.pem"
         renew_before_h = int(self.ctx.cfg.certs.renew_before_hours)
@@ -95,7 +117,8 @@ class SyncOrchestrator:
                 now = datetime.now(timezone.utc)
                 renew_after = expiry - timedelta(hours=renew_before_h)
                 if now < renew_after:
-                    if cert_covers_hosts(cert_path, all_hosts):
+                    effective_hosts = self.ctx.cert_provider.filter_sans(svc.host, all_hosts)
+                    if cert_covers_hosts(cert_path, effective_hosts):
                         self.logger.info(
                             f"[TLS] '{svc.name}' cert valid until {expiry}; "
                             f"next renewal at {renew_after}"
@@ -114,7 +137,7 @@ class SyncOrchestrator:
             self.logger.info(f"[TLS] No cert found for '{svc.name}'; issuing")
 
         cert_dir.mkdir(parents=True, exist_ok=True)
-        self.ctx.step_ca.obtain_certificate(svc.host, all_hosts, cert_path, key_path)
+        self.ctx.cert_provider.obtain_certificate(svc.host, all_hosts, cert_path, key_path)
 
         expiry = read_cert_expiry(cert_path)
         return (expiry - timedelta(hours=renew_before_h)) if expiry else None

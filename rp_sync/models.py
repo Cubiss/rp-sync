@@ -27,7 +27,8 @@ class DnsZone:
 
 @dataclass
 class CertsConfig:
-    disabled: bool = False
+    provider: str = "step-ca"  # "step-ca", "letsencrypt", or "none"
+    email: Optional[str] = None  # required for letsencrypt
     ca_url: str = ""
     ca_fingerprint: str = ""
     provisioner: str = ""
@@ -38,7 +39,7 @@ class CertsConfig:
 
     @property
     def enabled(self) -> bool:
-        return not self.disabled
+        return self.provider != "none"
 
 
 @dataclass
@@ -47,6 +48,34 @@ class NginxConfig:
     certs_dir: str = "/certs"
     cleanup: bool = True
     prefix: str = "rp-sync"
+    acme_webroot: Optional[str] = None  # "write_path" or "write_path;nginx_path"
+    ipv6: bool = True
+
+    @property
+    def certs_write_dir(self) -> str:
+        """Local filesystem path where rp-sync writes cert files."""
+        return self.certs_dir.split(";", 1)[0]
+
+    @property
+    def certs_nginx_dir(self) -> str:
+        """Path used in nginx ssl_certificate directives (container-side). Defaults to certs_dir."""
+        parts = self.certs_dir.split(";", 1)
+        return parts[1] if len(parts) > 1 else self.certs_dir
+
+    @property
+    def acme_write_path(self) -> Optional[str]:
+        """Filesystem path where rp-sync writes ACME challenge tokens."""
+        if not self.acme_webroot:
+            return None
+        return self.acme_webroot.split(";", 1)[0]
+
+    @property
+    def acme_nginx_path(self) -> str:
+        """Path used in the nginx root directive (container-side). Defaults to /var/www/acme."""
+        if not self.acme_webroot:
+            return "/var/www/acme"
+        parts = self.acme_webroot.split(";", 1)
+        return parts[1] if len(parts) > 1 else "/var/www/acme"
 
 
 @dataclass
